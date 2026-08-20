@@ -1,0 +1,26 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="96dp"
+    android:height="96dp"
+    android:viewportWidth="96"
+    android:viewportHeight="96">
+    <!-- Candle Flame -->
+    <path
+        android:fillColor="#B4574E"
+        android:pathData="M48,18 C48,18 42,28 42,34 C42,37.3 44.7,40 48,40 C51.3,40 54,37.3 54,34 C54,28 48,18 48,18 Z" />
+    <path
+        android:fillColor="#F59E0B"
+        android:pathData="M48,26 C48,26 45,31 45,34 C45,35.7 46.3,37 48,37 C49.7,37 51,35.7 51,34 C51,31 48,26 48,26 Z" />
+    <!-- Candle Body -->
+    <path
+        android:strokeColor="#78716C"
+        android:strokeWidth="2.5"
+        android:strokeLineCap="round"
+        android:pathData="M43,40 L43,62 M53,40 L53,62 M43,62 L53,62" />
+    <!-- Cupped Hands Line Art -->
+    <path
+        android:strokeColor="#B4574E"
+        android:strokeWidth="2.5"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M24,68 C30,78 40,82 48,82 C56,82 66,78 72,68 M18,58 C22,66 32,74 42,74 M78,58 C74,66 64,74 54,74" />
+</vector>
