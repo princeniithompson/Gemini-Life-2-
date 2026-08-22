@@ -1,6 +1,7 @@
 {
-  "name": "Gemini Live Diagnostic",
-  "description": "Engineering diagnostic tool to test and verify the Gemini Live API connection pipeline.",
+  "name": "First Light",
+  "description": "Daily morning prayer companion powered by voice with Gemini Live.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }
+

@@ -307,7 +307,7 @@ fun FavoritesScreen(
                         .fillMaxSize()
                         .padding(top = topInset)
                 ) {
-                    // Header: Centered serif title "Favorites" with brand sparkle icon
+                    // Header: Centered serif title "Favorites" with brand fire icon
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -316,8 +316,8 @@ fun FavoritesScreen(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Image(
-                            painter = painterResource(id = R.drawable.ic_brand_sparkle),
-                            contentDescription = "Brand Sparkle",
+                            painter = painterResource(id = R.drawable.ic_fire_logo),
+                            contentDescription = "First Light Logo",
                             modifier = Modifier
                                 .size(24.dp)
                                 .padding(end = 6.dp)
@@ -346,8 +346,8 @@ fun FavoritesScreen(
                                 verticalArrangement = Arrangement.Center
                             ) {
                                 Image(
-                                    painter = painterResource(id = R.drawable.ic_brand_sparkle),
-                                    contentDescription = "Sparkle",
+                                    painter = painterResource(id = R.drawable.ic_fire_logo),
+                                    contentDescription = "First Light Logo",
                                     modifier = Modifier
                                         .size(40.dp)
                                         .padding(bottom = 12.dp)

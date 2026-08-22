@@ -66,13 +66,12 @@ class PrayerActivity : ComponentActivity() {
                     },
                     onSkip = {
                         WakeDetectorService.engine.abandonAudioFocus(this)
-                        val now = System.currentTimeMillis()
-                        WakePrefsManager.setLastPrayerCompleted(this, now)
                         WakePrefsManager.setRitualPending(this, false, reason = "Skip today")
                         WakePrefsManager.logWakeEvent("[WAKE] Skipped today")
 
                         val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
                         nm.cancel(WakeDetectorService.ALARM_NOTIFICATION_ID)
+                        PrayerAlarmScheduler.scheduleNextPrayer(this)
 
                         finish()
                     }

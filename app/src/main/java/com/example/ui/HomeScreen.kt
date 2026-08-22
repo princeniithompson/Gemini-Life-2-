@@ -34,7 +34,6 @@ import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.outlined.FavoriteBorder
 import androidx.compose.material.icons.outlined.Person
-import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
@@ -42,6 +41,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -57,6 +57,8 @@ import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import com.example.ui.components.GlassyFire
+import com.example.ui.components.StreakCalendarCard
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -74,18 +76,28 @@ import androidx.compose.foundation.layout.statusBars
 import androidx.compose.material3.Surface
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.material.icons.filled.Key
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ModalBottomSheet
+import com.example.api.ApiKeyProvider
+import com.example.ui.key.KeySetupContent
 import com.example.wake.WakePrefsManager
 import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Locale
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HomeScreen(
-    onOpenSettings: () -> Unit,
     onOpenProfile: () -> Unit = {},
     onOpenFavorites: () -> Unit = {}
 ) {
     val context = LocalContext.current
+    var showKeySheet by remember { mutableStateOf(false) }
+    val hasWorkingKey = remember(context, showKeySheet) { ApiKeyProvider.hasWorkingKey(context) }
     val wakeState by WakePrefsManager.wakeState.collectAsStateWithLifecycle()
     val isPreviewMissedDay = wakeState.previewMissedDay
     val prayerHistory = remember(context, wakeState) { WakePrefsManager.getPrayerHistory(context) }
@@ -147,47 +159,81 @@ fun HomeScreen(
                 .fillMaxSize()
                 .background(Color(0xFFF2EFE6))
         ) {
-            // Main Non-Scrolling Outer Column
+            // Main Vertically Scrollable Content Column
             Column(
                 modifier = Modifier
                     .fillMaxSize()
+                    .verticalScroll(scrollState)
                     .padding(
                         top = statusBarPaddingTop + 12.dp,
-                        start = 24.dp,
-                        end = 24.dp
+                        start = 20.dp,
+                        end = 20.dp,
+                        bottom = navBarPaddingBottom + 104.dp // Generous space so calendar card never touches or overlaps floating bottom nav pill
                     ),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                // --- STATIC TOP SECTION ---
-                // 1. Flame Badge & Settings Gear
-                Box(
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    IconButton(
-                        onClick = onOpenSettings,
-                        modifier = Modifier
-                            .align(Alignment.TopEnd)
-                            .size(40.dp)
-                            .testTag("settings_button")
-                    ) {
-                        Icon(
-                            imageVector = Icons.Outlined.Settings,
-                            contentDescription = "Settings",
-                            tint = Color(0xFF1C1714),
-                            modifier = Modifier.size(24.dp)
-                        )
-                    }
-
-                    StreakFireBadge(
-                        streakNumber = streakCount,
-                        isReducedMotion = isReducedMotion,
-                        modifier = Modifier
-                            .align(Alignment.TopCenter)
-                            .padding(top = 4.dp)
-                    )
-                }
+                // 1. Flame Badge (Centered)
+                StreakFireBadge(
+                    streakNumber = streakCount,
+                    isReducedMotion = isReducedMotion,
+                    modifier = Modifier.padding(top = 4.dp)
+                )
 
                 Spacer(modifier = Modifier.height(10.dp))
+
+                // Missing Key Warning Banner (if no working key configured)
+                if (!hasWorkingKey) {
+                    Card(
+                        onClick = { showKeySheet = true },
+                        shape = RoundedCornerShape(16.dp),
+                        colors = CardDefaults.cardColors(containerColor = Color(0xFFFDF0ED)),
+                        border = BorderStroke(1.dp, Color(0xFFD98A84)),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(bottom = 12.dp)
+                            .testTag("missing_key_home_banner")
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(14.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(36.dp)
+                                    .background(Color(0xFFB4574E), CircleShape),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Key,
+                                    contentDescription = null,
+                                    tint = Color.White,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "Free Google API Key Needed",
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 14.sp,
+                                    color = Color(0xFFB4574E)
+                                )
+                                Text(
+                                    text = "First Light needs your key to pray with you. Tap to connect in 1 min.",
+                                    fontSize = 12.sp,
+                                    color = Color(0xFF2C2420)
+                                )
+                            }
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "Connect",
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 13.sp,
+                                color = Color(0xFFB4574E)
+                            )
+                        }
+                    }
+                }
 
                 // 2. PRAY NOW SECTION (CONDITIONAL - shown when today's prayer is pending OR force "Pray Now" simulation is ON in dev options)
                 val todayIso = String.format(Locale.US, "%04d-%02d-%02d", todayYear, todayMonth + 1, todayDay)
@@ -199,7 +245,7 @@ fun HomeScreen(
                         horizontalAlignment = Alignment.CenterHorizontally,
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(bottom = 10.dp)
+                            .padding(bottom = 12.dp)
                     ) {
                         Text(
                             text = "Today's prayer is still waiting.",
@@ -213,7 +259,12 @@ fun HomeScreen(
 
                         Surface(
                             onClick = {
-                                com.example.wake.WakeOverlayManager.triggerPrayerDoor(context)
+                                if (!ApiKeyProvider.hasWorkingKey(context)) {
+                                    showKeySheet = true
+                                    android.widget.Toast.makeText(context, "Please connect your free Google key to begin prayer", android.widget.Toast.LENGTH_SHORT).show()
+                                } else {
+                                    com.example.wake.WakeOverlayManager.triggerPrayerDoor(context)
+                                }
                             },
                             shape = CircleShape,
                             color = Color(0xFFB4574E),
@@ -249,143 +300,33 @@ fun HomeScreen(
                     }
                 }
 
-                // 3. MONTH HEADER & CHEVRONS
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column {
-                        Text(
-                            text = monthNameCaps,
-                            fontSize = 20.sp,
-                            fontWeight = FontWeight.Medium,
-                            color = Color(0xFF1C1714),
-                            letterSpacing = 1.2.sp,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                        Text(
-                            text = displayYear.toString(),
-                            fontSize = 14.sp,
-                            fontWeight = FontWeight.Normal,
-                            color = Color(0xFF8B7E72),
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    }
-
-                    Text(
-                        text = todayWeekdayShort,
-                        fontSize = 14.sp,
-                        fontWeight = FontWeight.Normal,
-                        color = Color(0xFF1C1714),
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                }
-
-                Spacer(modifier = Modifier.height(6.dp))
-
-                // Navigation Chevrons ‹ ›
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.Start,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Row(
-                        horizontalArrangement = Arrangement.spacedBy(16.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Filled.KeyboardArrowLeft,
-                            contentDescription = "Previous Month",
-                            tint = Color(0xFF1C1714),
-                            modifier = Modifier
-                                .size(24.dp)
-                                .clickable(
-                                    interactionSource = remember { MutableInteractionSource() },
-                                    indication = null
-                                ) {
-                                    if (displayMonth == 0) {
-                                        displayMonth = 11
-                                        displayYear -= 1
-                                    } else {
-                                        displayMonth -= 1
-                                    }
-                                }
-                        )
-
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                            contentDescription = "Next Month",
-                            tint = Color(0xFF1C1714),
-                            modifier = Modifier
-                                .size(24.dp)
-                                .clickable(
-                                    interactionSource = remember { MutableInteractionSource() },
-                                    indication = null
-                                ) {
-                                    if (displayMonth == 11) {
-                                        displayMonth = 0
-                                        displayYear += 1
-                                    } else {
-                                        displayMonth += 1
-                                    }
-                                }
-                        )
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(10.dp))
-
-                // 4. WEEKDAY HEADER ROW (M T W T F S S)
-                val weekdays = listOf("M", "T", "W", "T", "F", "S", "S")
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(bottom = 10.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    weekdays.forEach { dayLetter ->
-                        Box(
-                            modifier = Modifier.weight(1f),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Text(
-                                text = dayLetter,
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.Medium,
-                                color = Color(0xFF8B7E72),
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
+                // 3. STREAK CALENDAR CARD (Extracted Component)
+                StreakCalendarCard(
+                    displayYear = displayYear,
+                    displayMonth = displayMonth,
+                    todayYear = todayYear,
+                    todayMonth = todayMonth,
+                    todayDay = todayDay,
+                    prayerHistory = prayerHistory,
+                    firstInstallDate = firstInstallDate,
+                    isPreviewMissedDay = isPreviewMissedDay,
+                    onPreviousMonth = {
+                        if (displayMonth == 0) {
+                            displayMonth = 11
+                            displayYear -= 1
+                        } else {
+                            displayMonth -= 1
+                        }
+                    },
+                    onNextMonth = {
+                        if (displayMonth == 11) {
+                            displayMonth = 0
+                            displayYear += 1
+                        } else {
+                            displayMonth += 1
                         }
                     }
-                }
-
-                // --- DYNAMIC SCROLLABLE PORTION (ONLY THE CALENDAR NUMBERS GRID) ---
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .weight(1f)
-                        .verticalScroll(scrollState)
-                ) {
-                    Box(
-                        modifier = Modifier.padding(bottom = navBarPaddingBottom + 96.dp)
-                    ) {
-                        CalendarGrid(
-                            displayYear = displayYear,
-                            displayMonth = displayMonth,
-                            todayYear = todayYear,
-                            todayMonth = todayMonth,
-                            todayDay = todayDay,
-                            prayerHistory = prayerHistory,
-                            firstInstallDate = firstInstallDate,
-                            isPreviewMissedDay = isPreviewMissedDay
-                        )
-                    }
-                }
+                )
             }
 
             // Gradient Scrim behind Nav Pill
@@ -420,6 +361,30 @@ fun HomeScreen(
                         bottom = navBarPaddingBottom + 16.dp
                     )
             )
+
+            if (showKeySheet) {
+                ModalBottomSheet(
+                    onDismissRequest = { showKeySheet = false },
+                    containerColor = Color(0xFFFDFCF8)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 24.dp, vertical = 16.dp)
+                    ) {
+                        KeySetupContent(
+                            isModalOrSheet = true,
+                            onSuccess = {
+                                showKeySheet = false
+                                android.widget.Toast.makeText(context, "You're ready!", android.widget.Toast.LENGTH_SHORT).show()
+                            },
+                            onSkip = {
+                                showKeySheet = false
+                            }
+                        )
+                    }
+                }
+            }
         }
     }
 }
@@ -466,11 +431,8 @@ fun StreakFireBadge(
         Column(
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            // Flame Vector Icon with flicker animation
-            Icon(
-                painter = painterResource(id = R.drawable.ic_streak_flame),
-                contentDescription = "Streak Flame",
-                tint = Color.Unspecified,
+            // 3D Glassy Flame with flicker animation
+            GlassyFire(
                 modifier = Modifier
                     .size(width = flameWidth, height = flameHeight)
                     .graphicsLayer(
@@ -500,179 +462,6 @@ fun StreakFireBadge(
                 fontSize = 14.sp,
                 fontWeight = FontWeight.Normal,
                 color = Color(0xFF2C2420),
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-        }
-    }
-}
-
-@Composable
-private fun CalendarGrid(
-    displayYear: Int,
-    displayMonth: Int,
-    todayYear: Int,
-    todayMonth: Int,
-    todayDay: Int,
-    prayerHistory: Set<String>,
-    firstInstallDate: String,
-    isPreviewMissedDay: Boolean
-) {
-    val sdf = remember { java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US) }
-    val todayIso = String.format(Locale.US, "%04d-%02d-%02d", todayYear, todayMonth + 1, todayDay)
-
-    val calYesterday = remember {
-        Calendar.getInstance().apply {
-            add(Calendar.DAY_OF_YEAR, -1)
-        }
-    }
-    val yesterdayIso = sdf.format(calYesterday.time)
-
-    // Parse install date (e.g. "2026-08-10")
-    val (installYear, installMonth, installDay) = remember(firstInstallDate) {
-        try {
-            val parts = firstInstallDate.split("-")
-            Triple(parts[0].toInt(), parts[1].toInt() - 1, parts[2].toInt())
-        } catch (e: Exception) {
-            Triple(todayYear, todayMonth, todayDay)
-        }
-    }
-
-    val cal = remember(displayYear, displayMonth) {
-        Calendar.getInstance().apply {
-            set(Calendar.YEAR, displayYear)
-            set(Calendar.MONTH, displayMonth)
-            set(Calendar.DAY_OF_MONTH, 1)
-        }
-    }
-    val maxDays = cal.getActualMaximum(Calendar.DAY_OF_MONTH)
-
-    // Determine start day for this month:
-    // Days before install date are NOT in the grid at all. The grid begins from install day.
-    val startDay = when {
-        displayYear < installYear || (displayYear == installYear && displayMonth < installMonth) -> {
-            Int.MAX_VALUE // Past month before install -> no days
-        }
-        displayYear == installYear && displayMonth == installMonth -> {
-            installDay // Install month -> start from install day (e.g. 10 or 20)
-        }
-        else -> {
-            1 // Future month after install -> start at day 1
-        }
-    }
-
-    if (startDay > maxDays) {
-        // No days in this month
-        return
-    }
-
-    // Determine weekday offset for startDay on Row 0 (Monday = 0)
-    val startOffset = remember(displayYear, displayMonth, startDay) {
-        val calStart = Calendar.getInstance().apply {
-            set(Calendar.YEAR, displayYear)
-            set(Calendar.MONTH, displayMonth)
-            set(Calendar.DAY_OF_MONTH, startDay)
-        }
-        val firstDayOfWeek = calStart.get(Calendar.DAY_OF_WEEK) // SUNDAY=1, MONDAY=2...
-        (firstDayOfWeek + 5) % 7 // Monday = 0, Tuesday = 1...
-    }
-
-    val totalVisibleDays = maxDays - startDay + 1
-    val totalCells = startOffset + totalVisibleDays
-    val numRows = (totalCells + 6) / 7
-
-    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        for (rowIndex in 0 until numRows) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                for (colIndex in 0 until 7) {
-                    val cellIndex = rowIndex * 7 + colIndex
-                    val dayNumber = startDay + (cellIndex - startOffset)
-
-                    Box(
-                        modifier = Modifier.weight(1f),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        if (cellIndex >= startOffset && dayNumber <= maxDays) {
-                            val dayIso = String.format(Locale.US, "%04d-%02d-%02d", displayYear, displayMonth + 1, dayNumber)
-                            val realCompleted = prayerHistory.contains(dayIso)
-
-                            val isMissed = if (isPreviewMissedDay) {
-                                if (yesterdayIso >= firstInstallDate) {
-                                    dayIso == yesterdayIso
-                                } else {
-                                    dayNumber == startDay
-                                }
-                            } else {
-                                !realCompleted && dayIso < todayIso
-                            }
-
-                            val isCompleted = if (isPreviewMissedDay) {
-                                if (yesterdayIso >= firstInstallDate) {
-                                    if (dayIso == yesterdayIso) false else realCompleted
-                                } else {
-                                    if (dayNumber == startDay) false else realCompleted
-                                }
-                            } else {
-                                realCompleted
-                            }
-
-                            DayCircle(
-                                dayNumber = dayNumber,
-                                isCompleted = isCompleted,
-                                isMissed = isMissed
-                            )
-                        } else {
-                            Spacer(modifier = Modifier.size(40.dp))
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun DayCircle(
-    dayNumber: Int,
-    isCompleted: Boolean,
-    isMissed: Boolean
-) {
-    val backgroundColor = if (isCompleted) Color(0xFFB4574E) else Color(0xFF1C1714)
-
-    Box(
-        modifier = Modifier
-            .size(40.dp)
-            .background(backgroundColor, CircleShape),
-        contentAlignment = Alignment.Center
-    ) {
-        if (isMissed) {
-            Canvas(modifier = Modifier.size(16.dp)) {
-                val strokeWidthPx = 2.5.dp.toPx()
-                val color = Color(0xFFFDFCF8)
-                drawLine(
-                    color = color,
-                    start = Offset(0f, 0f),
-                    end = Offset(size.width, size.height),
-                    strokeWidth = strokeWidthPx,
-                    cap = StrokeCap.Round
-                )
-                drawLine(
-                    color = color,
-                    start = Offset(size.width, 0f),
-                    end = Offset(0f, size.height),
-                    strokeWidth = strokeWidthPx,
-                    cap = StrokeCap.Round
-                )
-            }
-        } else {
-            Text(
-                text = dayNumber.toString(),
-                fontSize = 16.sp,
-                fontWeight = FontWeight.Normal,
-                color = Color(0xFFFDFCF8),
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )

@@ -47,14 +47,19 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import com.example.favorites.FavoritesManager
+import com.example.ui.key.GuideImageLoader
+import com.example.ui.key.GuideImageType
 import com.example.ui.session.PrayerOrb
 import com.example.ui.session.SessionActions
 import com.example.ui.session.SettingsSheet
@@ -434,40 +439,50 @@ private fun WakeOverlayRoot(context: Context) {
                             ),
                             textAlign = TextAlign.Center
                         )
-                        Spacer(modifier = Modifier.height(16.dp))
-                        val jesusLambBitmap = remember(context) {
-                            try {
-                                val bitmap = android.graphics.BitmapFactory.decodeResource(context.resources, R.drawable.jesus_lamb)
-                                bitmap?.asImageBitmap()
-                            } catch (t: Throwable) {
-                                null
+                        var jesusLambBitmap by remember { mutableStateOf<ImageBitmap?>(null) }
+                        var isImageLoading by remember { mutableStateOf(true) }
+
+                        LaunchedEffect(page) {
+                            val decoded = GuideImageLoader.loadGuideBitmap(context, GuideImageType.JESUS_LAMB)
+                            if (decoded != null) {
+                                jesusLambBitmap = decoded.asImageBitmap()
+                            } else {
+                                jesusLambBitmap = null
                             }
+                            isImageLoading = false
                         }
-                        if (jesusLambBitmap != null) {
+
+                        if (isImageLoading) {
+                            Spacer(modifier = Modifier.height(16.dp))
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(48.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(24.dp),
+                                    color = Color(0xFFB4574E),
+                                    strokeWidth = 2.dp
+                                )
+                            }
+                            Spacer(modifier = Modifier.height(16.dp))
+                        } else if (jesusLambBitmap != null) {
+                            Spacer(modifier = Modifier.height(16.dp))
                             Image(
-                                bitmap = jesusLambBitmap,
+                                bitmap = jesusLambBitmap!!,
                                 contentDescription = "Jesus with Lamb",
                                 contentScale = ContentScale.Fit,
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .heightIn(max = 180.dp)
+                                    .clip(RoundedCornerShape(12.dp))
                             )
+                            Spacer(modifier = Modifier.height(20.dp))
                         } else {
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(140.dp)
-                                    .background(Color(0xFFF5F5F4), RoundedCornerShape(16.dp)),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Image(
-                                    painter = painterResource(id = R.drawable.ic_brand_sparkle),
-                                    contentDescription = "Guided Prayer",
-                                    modifier = Modifier.size(48.dp)
-                                )
-                            }
+                            // On ANY failure or absent cached image, hide image area completely
+                            Spacer(modifier = Modifier.height(20.dp))
                         }
-                        Spacer(modifier = Modifier.height(20.dp))
 
                         // [Begin Session]
                         Button(
@@ -528,13 +543,12 @@ private fun WakeOverlayRoot(context: Context) {
                             }
                             TextButton(
                                 onClick = {
-                                    val now = System.currentTimeMillis()
-                                    WakePrefsManager.setLastPrayerCompleted(context, now)
                                     WakePrefsManager.setRitualPending(context, false, reason = "Skip today")
                                     val msg = "[WAKE] Skipped today"
                                     Log.i("WakeDetector", msg)
                                     WakePrefsManager.logWakeEvent(msg)
                                     FirstLightNotificationHelper.cancelNotification(context)
+                                    PrayerAlarmScheduler.scheduleNextPrayer(context)
                                     WakeOverlayManager.removeOverlay(context)
                                 }
                             ) {
@@ -692,24 +706,32 @@ private fun WakeOverlayRoot(context: Context) {
                     }
                     OverlayPage.ERROR -> {
                         val connectionError by WakeDetectorService.engine.connectionErrorMessage.collectAsState()
-                        val errorText = connectionError ?: "Could not complete prayer session. Please check your network."
-                        val titleText = if (errorText.startsWith("Session rejected")) "Session Rejected" else "Connection Lost"
+                        val errorText = when {
+                            connectionError.isNullOrBlank() -> "Connection interrupted. Let's try again."
+                            connectionError!!.contains("Microphone") -> connectionError!!
+                            connectionError!!.contains("timed out") -> "Response timed out. Let's try again."
+                            connectionError!!.contains("401") || connectionError!!.contains("403") || connectionError!!.contains("API key") || connectionError!!.contains("Auth") -> "Authentication error. Please check your API key."
+                            connectionError!!.contains("429") || connectionError!!.contains("quota") || connectionError!!.contains("busy") -> "Service is temporarily busy. Let's try again."
+                            else -> "Connection interrupted. Let's try again."
+                        }
 
                         Text(
-                            text = titleText,
-                            style = MaterialTheme.typography.titleLarge.copy(
+                            text = errorText,
+                            style = MaterialTheme.typography.bodyLarge.copy(
                                 fontFamily = FontFamily.Serif,
-                                fontWeight = FontWeight.Bold,
-                                color = Color(0xFFB4574E)
+                                color = Color(0xFF2C2420)
                             ),
                             textAlign = TextAlign.Center
                         )
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Text(
-                            text = errorText,
-                            style = MaterialTheme.typography.bodyMedium.copy(color = Color(0xFF78716C)),
-                            textAlign = TextAlign.Center
-                        )
+                        Spacer(modifier = Modifier.height(20.dp))
+                        Button(
+                            onClick = {
+                                WakeDetectorService.startPrayerSession(context)
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFB4574E))
+                        ) {
+                            Text("Try Again", color = Color.White, fontWeight = FontWeight.SemiBold)
+                        }
                     }
                     else -> {}
                 }

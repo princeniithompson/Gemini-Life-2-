@@ -165,8 +165,6 @@ class PrayerActionReceiver : BroadcastReceiver() {
             }
 
             ACTION_SKIP -> {
-                val now = System.currentTimeMillis()
-                WakePrefsManager.setLastPrayerCompleted(context, now)
                 WakePrefsManager.setRitualPending(context, false, reason = "Skip today")
                 val msg = "[WAKE] Skipped today"
                 Log.i("WakeDetector", msg)

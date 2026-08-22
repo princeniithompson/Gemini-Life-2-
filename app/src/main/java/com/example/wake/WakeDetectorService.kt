@@ -120,11 +120,7 @@ class WakeDetectorService : Service() {
         }
 
         private fun getApiKey(context: Context): String {
-            val prefKey = WakePrefsManager.getCustomApiKey(context)
-            if (!prefKey.isNullByBlank()) return prefKey
-            val buildConfigKey = BuildConfig.GEMINI_API_KEY
-            if (buildConfigKey.isNotBlank()) return buildConfigKey
-            return ""
+            return com.example.api.ApiKeyProvider.getApiKey(context)
         }
 
         private fun String?.isNullByBlank(): Boolean = this.isNullOrBlank()
@@ -387,10 +383,18 @@ class WakeDetectorService : Service() {
                     WakePrefsManager.logWakeEvent(errorMsg)
                     WakePrefsManager.setRitualPending(this@WakeDetectorService, true, reason = "session error")
                     setOverlayPage(OverlayPage.ERROR)
-                    delay(3000)
-                    engine.disconnect()
-                    setOverlayPage(OverlayPage.CLOSED)
-                    WakeOverlayManager.removeOverlay(this@WakeDetectorService)
+                }
+            }
+        }
+
+        serviceScope.launch {
+            engine.connectionErrorMessage.collect { err ->
+                if (!err.isNullOrBlank() && overlayPage.value == OverlayPage.SESSION) {
+                    val errorMsg = "[WAKE] Connection error: $err"
+                    Log.e("WakeDetector", errorMsg)
+                    WakePrefsManager.logWakeEvent(errorMsg)
+                    WakePrefsManager.setRitualPending(this@WakeDetectorService, true, reason = "connection error")
+                    setOverlayPage(OverlayPage.ERROR)
                 }
             }
         }
@@ -541,25 +545,10 @@ class WakeDetectorService : Service() {
             .build()
 
         if (Build.VERSION.SDK_INT >= 34) {
-            val hasMicPermission = ContextCompat.checkSelfPermission(
-                this,
-                android.Manifest.permission.RECORD_AUDIO
-            ) == android.content.pm.PackageManager.PERMISSION_GRANTED
-
-            val fgsType = if (hasMicPermission) {
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
-            } else {
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
-            }
             try {
-                startForeground(FGS_NOTIFICATION_ID, notification, fgsType)
+                startForeground(FGS_NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
             } catch (e: Exception) {
-                Log.e("WakeDetector", "Failed startForeground with type $fgsType, falling back to specialUse: ${e.message}")
-                try {
-                    startForeground(FGS_NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
-                } catch (e2: Exception) {
-                    Log.e("WakeDetector", "Fallback startForeground failed: ${e2.message}")
-                }
+                Log.e("WakeDetector", "Failed startForeground with specialUse: ${e.message}")
             }
         } else {
             startForeground(FGS_NOTIFICATION_ID, notification)

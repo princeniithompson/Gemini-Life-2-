@@ -115,6 +115,7 @@ import androidx.compose.ui.window.DialogProperties
 import com.example.R
 import com.example.customization.VersePrefsManager
 import com.example.customization.WallpaperVerseRenderer
+import com.example.ui.components.BrandIconTile
 import com.example.wake.WakePrefsManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -123,7 +124,7 @@ import kotlinx.coroutines.withContext
 import java.util.Calendar
 
 enum class DoodleType {
-    CROSS, ICHTHYS, DOVE, SUN, STAR, OLIVE, CHALICE
+    CROSS, ICHTHYS, DOVE, SUN, FLAME, OLIVE, CHALICE
 }
 
 @Composable
@@ -176,13 +177,13 @@ fun DoodleCanvas(
                     drawLine(color, start, end, strokeWidth = strokeWidthPx, cap = StrokeCap.Round)
                 }
             }
-            DoodleType.STAR -> {
+            DoodleType.FLAME -> {
                 val path = Path().apply {
                     moveTo(w / 2f, 0f)
-                    quadraticTo(w / 2f, h / 2f, w, h / 2f)
-                    quadraticTo(w / 2f, h / 2f, w / 2f, h)
-                    quadraticTo(w / 2f, h / 2f, 0f, h / 2f)
-                    quadraticTo(w / 2f, h / 2f, w / 2f, 0f)
+                    quadraticTo(w * 0.85f, h * 0.35f, w * 0.75f, h * 0.7f)
+                    quadraticTo(w * 0.65f, h, w / 2f, h)
+                    quadraticTo(w * 0.35f, h, w * 0.25f, h * 0.7f)
+                    quadraticTo(w * 0.15f, h * 0.35f, w / 2f, 0f)
                 }
                 drawPath(path, color, style = stroke)
             }
@@ -284,7 +285,7 @@ fun DoodleBackgroundLayer() {
             delayMs = 150L
         )
         AnimatedDoodleItem(
-            type = DoodleType.STAR,
+            type = DoodleType.FLAME,
             size = 32.dp,
             rotation = 8f,
             color = Color(0x268B7E72),
@@ -356,7 +357,7 @@ fun DoodleBackgroundLayer() {
             delayMs = 600L
         )
         AnimatedDoodleItem(
-            type = DoodleType.STAR,
+            type = DoodleType.FLAME,
             size = 38.dp,
             rotation = -10f,
             color = Color(0x30B4574E),
@@ -416,12 +417,11 @@ fun CandleIcon(
 }
 
 @Composable
-fun FourPointStarIcon(
-    tint: Color = Color(0xFFB4574E),
+fun BrandFireIcon(
     modifier: Modifier = Modifier.size(20.dp)
 ) {
     Image(
-        painter = painterResource(id = R.drawable.ic_brand_sparkle),
+        painter = painterResource(id = R.drawable.ic_fire_logo),
         contentDescription = null,
         modifier = modifier
     )
@@ -640,18 +640,7 @@ fun OnboardingScreen(
                         horizontalAlignment = Alignment.CenterHorizontally,
                         verticalArrangement = Arrangement.Center
                     ) {
-                        Box(
-                            modifier = Modifier
-                                .size(72.dp)
-                                .background(Color(0xFFE8E0D4), RoundedCornerShape(36.dp)),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Image(
-                                painter = painterResource(id = R.drawable.ic_brand_sparkle),
-                                contentDescription = "Spiritual Guide",
-                                modifier = Modifier.size(36.dp)
-                            )
-                        }
+                        BrandIconTile()
 
                         Spacer(modifier = Modifier.height(32.dp))
 
@@ -701,20 +690,17 @@ fun OnboardingScreen(
                         horizontalAlignment = Alignment.CenterHorizontally,
                         verticalArrangement = Arrangement.Center
                     ) {
-                        // Index 0: Centered 4-point star above title
+                        // Index 0: Centered Brand Icon Tile above title
                         StaggeredAnimatedItem(index = 0) {
                             Box(
                                 modifier = Modifier.fillMaxWidth(),
                                 contentAlignment = Alignment.Center
                             ) {
-                                FourPointStarIcon(
-                                    tint = Color(0xFFB4574E),
-                                    modifier = Modifier.size(20.dp)
-                                )
+                                BrandIconTile()
                             }
                         }
 
-                        Spacer(modifier = Modifier.height(12.dp))
+                        Spacer(modifier = Modifier.height(20.dp))
 
                         // Index 1: Serif Title
                         StaggeredAnimatedItem(index = 1) {
@@ -977,7 +963,17 @@ fun OnboardingScreen(
                         }
                     }
                 } else if (step == 3) {
-                    // STEP 3: THE FIRST-DOWNLOAD LOCK SCREEN VERSE OFFER
+                    // STEP 3: API KEY SETUP
+                    com.example.ui.key.KeySetupContent(
+                        onSuccess = {
+                            currentStep = 4
+                        },
+                        onSkip = {
+                            currentStep = 4
+                        }
+                    )
+                } else if (step == 4) {
+                    // STEP 4: THE LOCK SCREEN PRAYER / VERSE SETUP (FINAL STEP)
                     Column(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalAlignment = Alignment.CenterHorizontally,
@@ -1160,7 +1156,7 @@ fun OnboardingScreen(
 
                         Spacer(modifier = Modifier.height(8.dp))
 
-                        // Secondary Skip CTA: [Maybe later]
+                        // Secondary Skip CTA: [Maybe later] -> Completes Onboarding and proceeds to Home
                         TextButton(
                             onClick = {
                                 WakePrefsManager.setOnboardingComplete(context, true)
@@ -1188,8 +1184,7 @@ fun OnboardingScreen(
         LockScreenSetupSheet(
             onDismiss = {
                 showSetupSheet = false
-                WakePrefsManager.setOnboardingComplete(context, true)
-                onOnboardingComplete()
+                currentStep = 4
             },
             onChoosePhoto = {
                 photoPickerLauncher.launch(

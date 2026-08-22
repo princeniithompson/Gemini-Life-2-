@@ -60,7 +60,8 @@ enum class StreamState {
     RECEIVING_STREAM,
     TURN_COMPLETE,
     RECONNECTING,
-    DISCONNECTED
+    DISCONNECTED,
+    STALLED
 }
 
 /**
@@ -206,7 +207,11 @@ class GeminiLiveDiagnosticEngine {
             delay(15_000)
             if (!_isGeminiSpeaking.value && currentStreamState.get() != StreamState.RECEIVING_STREAM) {
                 _isWaitingForResponse.value = true
-                log(LogLevel.WARN, "[TURN] No model response 15s after user speech")
+                setStreamState(StreamState.STALLED)
+                val stallMsg = "Response timed out. Let's try again."
+                log(LogLevel.WARN, "[TURN] No model response 15s after user speech - session stalled")
+                _connectionErrorMessage.value = stallMsg
+                _lockErrorEvent.tryEmit(stallMsg)
             }
         }
     }
@@ -662,13 +667,15 @@ class GeminiLiveDiagnosticEngine {
         debugMode: Boolean = true,
         context: Context? = null
     ) {
-        if (_isConnecting.value && _streamState.value != StreamState.RECONNECTING) {
+        if (_isConnecting.value && _streamState.value != StreamState.RECONNECTING && _streamState.value != StreamState.STALLED && _streamState.value != StreamState.DISCONNECTED && _streamState.value != StreamState.IDLE) {
             log(LogLevel.WARN, "Diagnostic is already running. Please disconnect first.")
             return
         }
 
         reconnectJob?.cancel()
         reconnectJob = null
+        responseWatchdogJob?.cancel()
+        responseWatchdogJob = null
 
         isUserDisconnecting.set(false)
         reconnectAttemptCount.set(0)
@@ -731,6 +738,11 @@ class GeminiLiveDiagnosticEngine {
                 },
                 onUserSpeechDetected = {
                     onUserSpeechSent()
+                },
+                onRecordingError = { errorMsg ->
+                    log(LogLevel.ERROR, "[MIC RECORD] $errorMsg")
+                    _connectionErrorMessage.value = errorMsg
+                    _lockErrorEvent.tryEmit(errorMsg)
                 }
             ).apply {
                 onRmsUpdated = { rms -> _micRmsLevel.value = rms }
@@ -985,6 +997,9 @@ class GeminiLiveDiagnosticEngine {
                         isInputAudioTranscriptionEnabled = false
                         handleConnectionFailure("1007 inputAudioTranscription fallback")
                     } else if (response != null) {
+                        if (code == 400 || code == 401 || code == 403 || reason.contains("401") || reason.contains("403") || reason.contains("API_KEY") || reason.contains("UNAUTHENTICATED") || reason.contains("PERMISSION_DENIED")) {
+                            com.example.api.ApiKeyProvider.notifyAuthError()
+                        }
                         log(LogLevel.ERROR, "Network Response Code: ${response.code} ${response.message}")
                         val rawReason = response.message.ifBlank { t.localizedMessage ?: "HTTP $code" }
                         val reasonFirst80 = rawReason.take(80)
@@ -1316,9 +1331,18 @@ class GeminiLiveDiagnosticEngine {
                 val recEngine = audioRecordingEngine
                 if (recEngine != null) {
                     if (recEngine.hasRecordAudioPermission()) {
-                        recEngine.startRecording(webSocket) { _isGeminiSpeaking.value || audioPlaybackEngine.isPlaying() }
+                        val started = recEngine.startRecording(webSocket) { _isGeminiSpeaking.value || audioPlaybackEngine.isPlaying() }
+                        if (!started) {
+                            val err = "Microphone unavailable. Tap to retry."
+                            log(LogLevel.ERROR, "[MIC RECORD] startRecording failed on setupComplete")
+                            _connectionErrorMessage.value = err
+                            _lockErrorEvent.tryEmit(err)
+                        }
                     } else {
+                        val err = "Microphone permission unavailable. Tap to retry."
                         log(LogLevel.WARN, "[MIC RECORD] RECORD_AUDIO permission not granted. Request runtime permission to enable Full Duplex microphone input.")
+                        _connectionErrorMessage.value = err
+                        _lockErrorEvent.tryEmit(err)
                     }
                 }
 
@@ -1699,10 +1723,20 @@ class GeminiLiveDiagnosticEngine {
                 },
                 onUserSpeechDetected = {
                     onUserSpeechSent()
+                },
+                onRecordingError = { errorMsg ->
+                    log(LogLevel.ERROR, "[MIC RECORD] $errorMsg")
+                    _connectionErrorMessage.value = errorMsg
+                    _lockErrorEvent.tryEmit(errorMsg)
                 }
             )
         }
-        audioRecordingEngine?.startRecording(ws) { _isGeminiSpeaking.value || audioPlaybackEngine.isPlaying() }
+        val started = audioRecordingEngine?.startRecording(ws) { _isGeminiSpeaking.value || audioPlaybackEngine.isPlaying() }
+        if (started == false) {
+            val err = "Microphone unavailable. Tap to retry."
+            _connectionErrorMessage.value = err
+            _lockErrorEvent.tryEmit(err)
+        }
     }
 
     /**

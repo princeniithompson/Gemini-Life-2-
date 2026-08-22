@@ -13,6 +13,8 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Density
@@ -141,10 +143,14 @@ fun DiagnosticScreen(
 
     LaunchedEffect(Unit) {
         com.example.wake.WakePrefsManager.updateWakeState(context)
+        viewModel.syncApiKey(context)
     }
 
     var showApiKey by remember { mutableStateOf(false) }
     var configExpanded by remember { mutableStateOf(true) }
+    var isDevBackdoorEnabled by remember {
+        mutableStateOf(com.example.api.ApiKeyProvider.isDeveloperMode(context))
+    }
     var selectedFontScale by remember { mutableStateOf("Default") } // Options: "Small", "Default", "Large", "Huge"
 
     val currentDensity = LocalDensity.current
@@ -204,7 +210,7 @@ fun DiagnosticScreen(
                     title = {
                         Column {
                             Text(
-                                text = "Gemini Live Diagnostic",
+                                text = "First Light Diagnostic",
                                 fontWeight = FontWeight.Bold,
                                 fontSize = 18.sp
                             )
@@ -538,6 +544,49 @@ fun DiagnosticScreen(
 
                             AnimatedVisibility(visible = configExpanded) {
                                 Column(modifier = Modifier.padding(top = 8.dp)) {
+                                    val keySource = com.example.api.ApiKeyProvider.getKeySource(context)
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(bottom = 6.dp),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(
+                                            text = "Active Source: $keySource",
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = if (keySource != "None") Color(0xFF4ADE80) else Color(0xFFF87171)
+                                        )
+
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Text(
+                                                text = "Dev Backdoor",
+                                                fontSize = 11.sp,
+                                                color = Color(0xFF94A3B8)
+                                            )
+                                            Spacer(modifier = Modifier.width(6.dp))
+                                            Switch(
+                                                checked = isDevBackdoorEnabled,
+                                                onCheckedChange = { enabled ->
+                                                    isDevBackdoorEnabled = enabled
+                                                    viewModel.setDeveloperMode(context, enabled)
+                                                    Toast.makeText(
+                                                        context,
+                                                        if (enabled) "Developer backdoor enabled" else "Developer backdoor disabled",
+                                                        Toast.LENGTH_SHORT
+                                                    ).show()
+                                                },
+                                                colors = SwitchDefaults.colors(
+                                                    checkedThumbColor = Color.White,
+                                                    checkedTrackColor = Color(0xFF38BDF8),
+                                                    uncheckedThumbColor = Color.Gray,
+                                                    uncheckedTrackColor = Color(0xFF334155)
+                                                )
+                                            )
+                                        }
+                                    }
+
                                     OutlinedTextField(
                                         value = apiKeyInput,
                                         onValueChange = { viewModel.apiKeyInput.value = it },
@@ -563,6 +612,26 @@ fun DiagnosticScreen(
                                             .fillMaxWidth()
                                             .testTag("api_key_input")
                                     )
+
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(top = 4.dp),
+                                        horizontalArrangement = Arrangement.End
+                                    ) {
+                                        Button(
+                                            onClick = {
+                                                viewModel.saveUserApiKey(context, apiKeyInput)
+                                                Toast.makeText(context, "API Key saved", Toast.LENGTH_SHORT).show()
+                                            },
+                                            colors = ButtonDefaults.buttonColors(
+                                                containerColor = Color(0xFF0284C7)
+                                            ),
+                                            shape = RoundedCornerShape(8.dp)
+                                        ) {
+                                            Text("Save Key", fontSize = 12.sp, color = Color.White)
+                                        }
+                                    }
 
                                     Spacer(modifier = Modifier.height(6.dp))
 

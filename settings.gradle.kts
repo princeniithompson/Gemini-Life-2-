@@ -22,6 +22,6 @@ dependencyResolutionManagement {
   }
 }
 
-rootProject.name = "Gemini Live Diagnostic"
+rootProject.name = "First Light"
 
 include(":app")

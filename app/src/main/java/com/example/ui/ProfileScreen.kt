@@ -12,6 +12,15 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
@@ -48,6 +57,8 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Image
+import androidx.compose.material.icons.filled.Key
+import com.example.ui.key.KeySetupContent
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material3.AlertDialog
@@ -82,6 +93,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -95,6 +107,9 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.asImageBitmap
@@ -111,6 +126,7 @@ import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -141,20 +157,58 @@ private data class MissingPermissionEntry(
     val onClick: () -> Unit
 )
 
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
 fun ProfileScreen(
     onBack: () -> Unit,
     onOpenVerseEditor: () -> Unit = {},
     openTextOptionsOnLaunch: Boolean = false,
     onResetTextOptionsFlag: () -> Unit = {},
-    onOpenFavorites: () -> Unit = {}
+    onOpenFavorites: () -> Unit = {},
+    onOpenDiagnostic: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
     val scrollState = rememberScrollState(initial = ProfileScrollStateHolder.scrollPosition)
+    var isNavVisible by remember { mutableStateOf(true) }
+    var accumulatedScrollDelta by remember { mutableFloatStateOf(0f) }
+
+    val nestedScrollConnection = remember {
+        object : NestedScrollConnection {
+            override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
+                val delta = available.y
+                // When close to the top of the profile, always keep navigation bar visible
+                if (scrollState.value <= 15) {
+                    isNavVisible = true
+                    accumulatedScrollDelta = 0f
+                    return Offset.Zero
+                }
+
+                if (delta < 0f) {
+                    // Scrolling down towards deeper sections (hide navigation bar)
+                    if (accumulatedScrollDelta > 0f) accumulatedScrollDelta = 0f
+                    accumulatedScrollDelta += delta
+                    if (accumulatedScrollDelta < -15f) {
+                        isNavVisible = false
+                    }
+                } else if (delta > 0f) {
+                    // Scrolling up towards top (show navigation bar)
+                    if (accumulatedScrollDelta < 0f) accumulatedScrollDelta = 0f
+                    accumulatedScrollDelta += delta
+                    if (accumulatedScrollDelta > 15f) {
+                        isNavVisible = true
+                    }
+                }
+                return Offset.Zero
+            }
+        }
+    }
 
     LaunchedEffect(scrollState.value) {
         ProfileScrollStateHolder.scrollPosition = scrollState.value
+        if (scrollState.value <= 15) {
+            isNavVisible = true
+        }
     }
     val lifecycleOwner = LocalLifecycleOwner.current
     BackHandler { onBack() }
@@ -195,6 +249,7 @@ fun ProfileScreen(
     var hasOverlayPermission by remember { mutableStateOf(PermissionHelper.hasOverlayPermission(context)) }
     var hasNotificationPermission by remember { mutableStateOf(PermissionHelper.hasNotificationPermission(context)) }
     var hasExactAlarmPermission by remember { mutableStateOf(PermissionHelper.hasExactAlarmPermission(context)) }
+    var hasApiKey by remember { mutableStateOf(com.example.api.ApiKeyProvider.hasWorkingKey(context)) }
 
     fun refreshAllPermissions() {
         hasMicPermission = PermissionHelper.hasRecordAudioPermission(context)
@@ -202,6 +257,7 @@ fun ProfileScreen(
         hasOverlayPermission = PermissionHelper.hasOverlayPermission(context)
         hasNotificationPermission = PermissionHelper.hasNotificationPermission(context)
         hasExactAlarmPermission = PermissionHelper.hasExactAlarmPermission(context)
+        hasApiKey = com.example.api.ApiKeyProvider.hasWorkingKey(context)
     }
 
     val micPermissionLauncher = rememberLauncherForActivityResult(
@@ -228,6 +284,18 @@ fun ProfileScreen(
     // Bottom Sheets
     var showSetupSheet by remember { mutableStateOf(false) }
     var showTextOptionsSheet by remember { mutableStateOf(openTextOptionsOnLaunch) }
+    var showKeySheet by remember { mutableStateOf(false) }
+
+    // Secret Developer Backdoor States (Triggered by 9 taps on top fire ornament)
+    var fireTapCount by remember { mutableIntStateOf(0) }
+    var lastFireTapTime by remember { mutableLongStateOf(0L) }
+    var showDevPasscodeDialog by remember { mutableStateOf(false) }
+    var devPasscodeInput by remember { mutableStateOf("") }
+    var devPasscodeError by remember { mutableStateOf<String?>(null) }
+    var showDevToolsDialog by remember { mutableStateOf(false) }
+    var isDeveloperModeActive by remember {
+        mutableStateOf(com.example.api.ApiKeyProvider.isDeveloperMode(context))
+    }
 
     LaunchedEffect(openTextOptionsOnLaunch) {
         if (openTextOptionsOnLaunch) {
@@ -336,44 +404,86 @@ fun ProfileScreen(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color(0xFFF2EFE6)) // Cream brand token
+            .background(Color(0xFFF2EFE6)) // Cream brand canvas
     ) {
+        // Ambient Warm Mesh Glows for rich depth (Lollipop/Liquid glass lighting)
+        Canvas(modifier = Modifier.fillMaxSize()) {
+            val w = size.width
+            val h = size.height
+
+            // Top-right soft gold warm radiant aura
+            drawCircle(
+                brush = Brush.radialGradient(
+                    colors = listOf(Color(0xFFE8B87A).copy(alpha = 0.22f), Color(0x00E8B87A)),
+                    center = Offset(w * 0.85f, h * 0.08f),
+                    radius = w * 0.65f
+                )
+            )
+
+            // Center-left terracotta rose subtle aura
+            drawCircle(
+                brush = Brush.radialGradient(
+                    colors = listOf(Color(0xFFD98A84).copy(alpha = 0.14f), Color(0x00D98A84)),
+                    center = Offset(w * 0.12f, h * 0.38f),
+                    radius = w * 0.70f
+                )
+            )
+
+            // Bottom-right warm brown ambient grounding
+            drawCircle(
+                brush = Brush.radialGradient(
+                    colors = listOf(Color(0xFFB4574E).copy(alpha = 0.10f), Color(0x00B4574E)),
+                    center = Offset(w * 0.90f, h * 0.75f),
+                    radius = w * 0.60f
+                )
+            )
+        }
+
         Column(
             modifier = Modifier
                 .fillMaxSize()
+                .nestedScroll(nestedScrollConnection)
                 .verticalScroll(scrollState)
                 .padding(
-                    top = topInset + 20.dp,
-                    bottom = bottomInset + 100.dp,
-                    start = 20.dp,
-                    end = 20.dp
+                    top = topInset + 6.dp,
+                    bottom = bottomInset + 84.dp,
+                    start = 16.dp,
+                    end = 16.dp
                 ),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            // Header: Circular Back Button and Centered Profile title
+            // Header: Tactile Circular Back Button and Centered Profile title
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(48.dp)
+                    .height(44.dp)
             ) {
-                // Circular back button
+                // Popped-out 3D Tactile Back Button
                 Box(
                     modifier = Modifier
-                        .size(42.dp)
+                        .size(40.dp)
                         .align(Alignment.CenterStart)
                         .shadow(
                             elevation = 4.dp,
                             shape = CircleShape,
-                            ambientColor = Color(0x1A2C2420),
-                            spotColor = Color(0x1A2C2420)
-                        )
-                        .border(
-                            width = 1.dp,
-                            color = Color(0xFFE8E0D4),
-                            shape = CircleShape
+                            ambientColor = Color(0x2E2C2420),
+                            spotColor = Color(0x2E2C2420)
                         )
                         .clip(CircleShape)
-                        .background(Color(0xFFFDFCF8))
+                        .background(
+                            Brush.verticalGradient(
+                                listOf(Color(0xFFFFFFFF), Color(0xFFFDFCF8), Color(0xFFF4EDE2))
+                            )
+                        )
+                        .border(
+                            BorderStroke(
+                                1.dp,
+                                Brush.verticalGradient(
+                                    listOf(Color(0xFFFFFFFF), Color(0xFFE8E0D4))
+                                )
+                            ),
+                            CircleShape
+                        )
                         .clickable(
                             interactionSource = remember { MutableInteractionSource() },
                             indication = null
@@ -387,7 +497,7 @@ fun ProfileScreen(
                         imageVector = Icons.AutoMirrored.Filled.KeyboardArrowLeft,
                         contentDescription = "Back",
                         tint = Color(0xFF2C2420),
-                        modifier = Modifier.size(24.dp)
+                        modifier = Modifier.size(22.dp)
                     )
                 }
 
@@ -397,64 +507,173 @@ fun ProfileScreen(
                     style = TextStyle(
                         fontFamily = FontFamily.Serif,
                         fontWeight = FontWeight.Bold,
-                        fontSize = 22.sp,
-                        color = Color(0xFF2C2420)
+                        fontSize = 20.sp,
+                        color = Color(0xFF2C2420),
+                        shadow = Shadow(
+                            color = Color(0x142C2420),
+                            offset = Offset(0f, 2f),
+                            blurRadius = 4f
+                        )
                     ),
                     modifier = Modifier.align(Alignment.Center)
                 )
             }
 
-            Spacer(modifier = Modifier.height(10.dp))
+            Spacer(modifier = Modifier.height(2.dp))
 
-            // Terracotta Sparkle ornament
-            Image(
-                painter = painterResource(id = R.drawable.ic_brand_sparkle),
-                contentDescription = null,
-                modifier = Modifier.size(28.dp)
-            )
+            // Popped Jewel Fire Logo Ornament (Secret Developer Backdoor: 9 taps)
+            Box(
+                modifier = Modifier
+                    .size(42.dp)
+                    .clip(CircleShape)
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null
+                    ) {
+                        val now = System.currentTimeMillis()
+                        if (now - lastFireTapTime > 3000L) {
+                            fireTapCount = 1
+                        } else {
+                            fireTapCount++
+                        }
+                        lastFireTapTime = now
 
-            Spacer(modifier = Modifier.height(20.dp))
+                        if (fireTapCount >= 9) {
+                            fireTapCount = 0
+                            devPasscodeInput = ""
+                            devPasscodeError = null
+                            showDevPasscodeDialog = true
+                        }
+                    }
+                    .testTag("profile_secret_fire_trigger"),
+                contentAlignment = Alignment.Center
+            ) {
+                // Outer subtle gloss halo
+                Box(
+                    modifier = Modifier
+                        .size(34.dp)
+                        .clip(CircleShape)
+                        .background(
+                            Brush.radialGradient(
+                                listOf(
+                                    Color(0xFFE8B87A).copy(alpha = 0.35f),
+                                    Color(0xFFB4574E).copy(alpha = 0.15f),
+                                    Color(0x00F2EFE6)
+                                )
+                            )
+                        )
+                )
+                Image(
+                    painter = painterResource(id = R.drawable.ic_fire_logo),
+                    contentDescription = null,
+                    modifier = Modifier.size(24.dp)
+                )
+            }
 
-            // ════ SECTION 1 — IDENTITY (NO CARD CONTAINER) ════
+            Spacer(modifier = Modifier.height(4.dp))
+
+            // ════ SECTION 1 — IDENTITY (3D LOLLIPOP / BALLOON AVATAR) ════
             Box(
                 modifier = Modifier
                     .size(76.dp)
-                    .testTag("profile_identity_avatar_container")
+                    .testTag("profile_identity_avatar_container"),
+                contentAlignment = Alignment.Center
             ) {
-                // 76dp Monogram circle (terracotta tint)
+                // 3D Popped Lollipop Monogram Sphere
                 Box(
                     modifier = Modifier
-                        .fillMaxSize()
+                        .size(72.dp)
+                        .shadow(
+                            elevation = 8.dp,
+                            shape = CircleShape,
+                            ambientColor = Color(0x40B4574E),
+                            spotColor = Color(0x4DB4574E)
+                        )
                         .clip(CircleShape)
-                        .background(Color(0xFFB4574E).copy(alpha = 0.14f))
-                        .border(1.5.dp, Color(0xFFB4574E).copy(alpha = 0.30f), CircleShape),
+                        .background(
+                            Brush.linearGradient(
+                                colors = listOf(
+                                    Color(0xFFD9776C), // Lighter warm terracotta highlight
+                                    Color(0xFFB4574E), // Primary terracotta
+                                    Color(0xFF8A3830), // Deep rich terracotta shadow
+                                    Color(0xFF5A221C)  // Rich warm brown depth
+                                ),
+                                start = Offset(0f, 0f),
+                                end = Offset(220f, 220f)
+                            )
+                        )
+                        .border(
+                            BorderStroke(
+                                1.5.dp,
+                                Brush.verticalGradient(
+                                    listOf(
+                                        Color(0xFFFFD4CE).copy(alpha = 0.85f), // Gloss specular rim
+                                        Color(0xFFB4574E).copy(alpha = 0.40f)
+                                    )
+                                )
+                            ),
+                            CircleShape
+                        ),
                     contentAlignment = Alignment.Center
                 ) {
+                    // Specular light gloss arc across top-left
+                    Canvas(modifier = Modifier.fillMaxSize()) {
+                        val w = size.width
+                        val h = size.height
+                        drawCircle(
+                            brush = Brush.radialGradient(
+                                colors = listOf(
+                                    Color.White.copy(alpha = 0.45f),
+                                    Color.White.copy(alpha = 0.0f)
+                                ),
+                                center = Offset(w * 0.32f, h * 0.28f),
+                                radius = w * 0.38f
+                            )
+                        )
+                    }
+
                     Text(
                         text = monogramLetter,
                         style = TextStyle(
                             fontFamily = FontFamily.Serif,
                             fontWeight = FontWeight.Bold,
                             fontSize = 32.sp,
-                            color = Color(0xFFB4574E)
+                            color = Color(0xFFFDFCF8),
+                            shadow = Shadow(
+                                color = Color(0x663D1814),
+                                offset = Offset(0f, 2f),
+                                blurRadius = 4f
+                            )
                         )
                     )
                 }
 
-                // 30dp circular warm-white badge with terracotta pencil icon overlapping bottom-right
+                // 3D Popped Circular Edit Badge overlapping bottom-right
                 Box(
                     modifier = Modifier
-                        .size(30.dp)
+                        .size(28.dp)
                         .align(Alignment.BottomEnd)
                         .shadow(
-                            elevation = 2.dp,
+                            elevation = 5.dp,
                             shape = CircleShape,
-                            ambientColor = Color(0x1A2C2420),
-                            spotColor = Color(0x1A2C2420)
+                            ambientColor = Color(0x332C2420),
+                            spotColor = Color(0x332C2420)
                         )
-                        .border(1.dp, Color(0xFFE8E0D4), CircleShape)
                         .clip(CircleShape)
-                        .background(Color(0xFFFDFCF8))
+                        .background(
+                            Brush.verticalGradient(
+                                listOf(Color(0xFFFFFFFF), Color(0xFFFDFCF8), Color(0xFFF6EDE2))
+                            )
+                        )
+                        .border(
+                            BorderStroke(
+                                1.dp,
+                                Brush.verticalGradient(
+                                    listOf(Color(0xFFFFFFFF), Color(0xFFE8E0D4))
+                                )
+                            ),
+                            CircleShape
+                        )
                         .clickable { showEditProfileDialog = true }
                         .testTag("btn_edit_profile"),
                     contentAlignment = Alignment.Center
@@ -463,349 +682,636 @@ fun ProfileScreen(
                         imageVector = Icons.Default.Edit,
                         contentDescription = "Edit Profile",
                         tint = Color(0xFFB4574E),
-                        modifier = Modifier.size(15.dp)
+                        modifier = Modifier.size(14.dp)
                     )
                 }
             }
 
-            Spacer(modifier = Modifier.height(12.dp))
+            Spacer(modifier = Modifier.height(6.dp))
 
-            // Centered User Name (Serif, 24sp, warm black)
+            // Centered User Name (Serif, 22sp, warm black with subtle depth)
             Text(
                 text = displayName,
                 style = TextStyle(
                     fontFamily = FontFamily.Serif,
                     fontWeight = FontWeight.Bold,
-                    fontSize = 24.sp,
-                    color = Color(0xFF2C2420)
+                    fontSize = 22.sp,
+                    color = Color(0xFF2C2420),
+                    shadow = Shadow(
+                        color = Color(0x142C2420),
+                        offset = Offset(0f, 1.5f),
+                        blurRadius = 3f
+                    )
                 ),
                 textAlign = TextAlign.Center,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
 
+            Spacer(modifier = Modifier.height(3.dp))
+
+            // Tactile Pill for Installation Date ("With First Light since ...")
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(Color(0xFFE8E0D4).copy(alpha = 0.40f))
+                    .border(0.8.dp, Color(0xFFE8E0D4), RoundedCornerShape(14.dp))
+                    .padding(horizontal = 10.dp, vertical = 3.dp)
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(5.dp)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(5.dp)
+                            .clip(CircleShape)
+                            .background(Color(0xFFB4574E))
+                    )
+                    Text(
+                        text = "With First Light since $formattedInstallDate",
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = Color(0xFF6B5E54),
+                        textAlign = TextAlign.Center
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            // ════ SECTION 2 — YOUR JOURNEY (POPPED 3D STATS PODIUM) ════
+            SectionHeaderLabel(text = "YOUR JOURNEY")
             Spacer(modifier = Modifier.height(4.dp))
 
-            // Sleek subtext (12sp, taupe)
-            Text(
-                text = "With First Light since $formattedInstallDate",
-                fontSize = 12.sp,
-                color = Color(0xFF8B7E72),
-                textAlign = TextAlign.Center
-            )
-
-            Spacer(modifier = Modifier.height(16.dp))
-
-            // ════ SECTION 2 — YOUR JOURNEY (NO CARD CONTAINER) ════
-            SectionHeaderLabel(text = "YOUR JOURNEY")
-            Spacer(modifier = Modifier.height(8.dp))
-
-            Row(
+            // Plush Popped-out Capsule Card for Stats
+            Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .testTag("profile_journey_stats"),
-                horizontalArrangement = Arrangement.SpaceEvenly,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                // Column 1: Current streak
-                Column(
-                    modifier = Modifier.weight(1f),
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(4.dp)
-                    ) {
-                        Icon(
-                            painter = painterResource(id = R.drawable.ic_streak_flame),
-                            contentDescription = null,
-                            tint = Color(0xFFB4574E),
-                            modifier = Modifier.size(18.dp)
+                    .shadow(
+                        elevation = 5.dp,
+                        shape = RoundedCornerShape(18.dp),
+                        ambientColor = Color(0x1F2C2420),
+                        spotColor = Color(0x1F2C2420)
+                    )
+                    .clip(RoundedCornerShape(18.dp))
+                    .background(
+                        Brush.verticalGradient(
+                            listOf(Color(0xFFFFFFFF), Color(0xFFFDFCF8), Color(0xFFF8F4EB))
                         )
+                    )
+                    .border(
+                        BorderStroke(
+                            1.dp,
+                            Brush.verticalGradient(
+                                listOf(Color(0xFFFFFFFF), Color(0xFFE8E0D4))
+                            )
+                        ),
+                        RoundedCornerShape(18.dp)
+                    )
+                    .padding(vertical = 12.dp, horizontal = 10.dp)
+                    .testTag("profile_journey_stats")
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceEvenly,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    // Column 1: Current streak
+                    Column(
+                        modifier = Modifier.weight(1f),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(22.dp)
+                                    .clip(CircleShape)
+                                    .background(
+                                        Brush.radialGradient(
+                                            listOf(
+                                                Color(0xFFE8B87A).copy(alpha = 0.35f),
+                                                Color(0xFFB4574E).copy(alpha = 0.15f)
+                                            )
+                                        )
+                                    ),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    painter = painterResource(id = R.drawable.ic_streak_flame),
+                                    contentDescription = null,
+                                    tint = Color(0xFFB4574E),
+                                    modifier = Modifier.size(15.dp)
+                                )
+                            }
+                            Text(
+                                text = "$currentStreak ${if (currentStreak == 1) "day" else "days"}",
+                                style = TextStyle(
+                                    fontFamily = FontFamily.Serif,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 16.sp,
+                                    color = Color(0xFF2C2420)
+                                )
+                            )
+                        }
+                        Spacer(modifier = Modifier.height(2.dp))
                         Text(
-                            text = "$currentStreak ${if (currentStreak == 1) "day" else "days"}",
+                            text = "Current streak",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = Color(0xFF8B7E72),
+                            textAlign = TextAlign.Center
+                        )
+                    }
+
+                    // Vertical soft warm hairline divider
+                    Box(
+                        modifier = Modifier
+                            .width(1.dp)
+                            .height(30.dp)
+                            .background(
+                                Brush.verticalGradient(
+                                    listOf(Color(0x00E8E0D4), Color(0xFFE8E0D4), Color(0x00E8E0D4))
+                                )
+                            )
+                    )
+
+                    // Column 2: Total prayers
+                    Column(
+                        modifier = Modifier.weight(1f),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Text(
+                            text = "$totalPrayers",
                             style = TextStyle(
                                 fontFamily = FontFamily.Serif,
                                 fontWeight = FontWeight.Bold,
-                                fontSize = 18.sp,
+                                fontSize = 17.sp,
                                 color = Color(0xFF2C2420)
                             )
                         )
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Text(
+                            text = "Total prayers",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = Color(0xFF8B7E72),
+                            textAlign = TextAlign.Center
+                        )
                     }
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = "Current streak",
-                        fontSize = 12.sp,
-                        color = Color(0xFF8B7E72),
-                        textAlign = TextAlign.Center
+
+                    // Vertical soft warm hairline divider
+                    Box(
+                        modifier = Modifier
+                            .width(1.dp)
+                            .height(30.dp)
+                            .background(
+                                Brush.verticalGradient(
+                                    listOf(Color(0x00E8E0D4), Color(0xFFE8E0D4), Color(0x00E8E0D4))
+                                )
+                            )
                     )
-                }
 
-                // Vertical hairline divider
-                Box(
-                    modifier = Modifier
-                        .width(1.dp)
-                        .height(36.dp)
-                        .background(Color(0xFFE8E0D4))
-                )
-
-                // Column 2: Total prayers
-                Column(
-                    modifier = Modifier.weight(1f),
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    Text(
-                        text = "$totalPrayers",
-                        style = TextStyle(
-                            fontFamily = FontFamily.Serif,
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 18.sp,
-                            color = Color(0xFF2C2420)
+                    // Column 3: Longest streak
+                    Column(
+                        modifier = Modifier.weight(1f),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Text(
+                            text = "$longestStreak ${if (longestStreak == 1) "day" else "days"}",
+                            style = TextStyle(
+                                fontFamily = FontFamily.Serif,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 16.sp,
+                                color = Color(0xFF2C2420)
+                            )
                         )
-                    )
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = "Total prayers",
-                        fontSize = 12.sp,
-                        color = Color(0xFF8B7E72),
-                        textAlign = TextAlign.Center
-                    )
-                }
-
-                // Vertical hairline divider
-                Box(
-                    modifier = Modifier
-                        .width(1.dp)
-                        .height(36.dp)
-                        .background(Color(0xFFE8E0D4))
-                )
-
-                // Column 3: Longest streak
-                Column(
-                    modifier = Modifier.weight(1f),
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    Text(
-                        text = "$longestStreak ${if (longestStreak == 1) "day" else "days"}",
-                        style = TextStyle(
-                            fontFamily = FontFamily.Serif,
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 18.sp,
-                            color = Color(0xFF2C2420)
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Text(
+                            text = "Longest streak",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = Color(0xFF8B7E72),
+                            textAlign = TextAlign.Center
                         )
-                    )
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = "Longest streak",
-                        fontSize = 12.sp,
-                        color = Color(0xFF8B7E72),
-                        textAlign = TextAlign.Center
-                    )
+                    }
                 }
             }
 
-            Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(10.dp))
 
-            // ════ APP PERMISSIONS CARD ════
+            // ════ APP PERMISSIONS CARD (LIQUID GLASS ELEVATED CONTAINER) ════
             SectionHeaderLabel(text = "APP PERMISSIONS")
-            Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(4.dp))
 
             val allPermissionsGranted = hasMicPermission && hasPhoneStatePermission && hasOverlayPermission && hasNotificationPermission && hasExactAlarmPermission
 
-            Card(
-                shape = RoundedCornerShape(16.dp),
-                colors = CardDefaults.cardColors(containerColor = Color(0xFFFDFCF8)),
-                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
-                border = BorderStroke(1.dp, Color(0xFFE8E0D4)),
+            Box(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .shadow(
+                        elevation = 5.dp,
+                        shape = RoundedCornerShape(18.dp),
+                        ambientColor = Color(0x1F2C2420),
+                        spotColor = Color(0x1F2C2420)
+                    )
+                    .clip(RoundedCornerShape(18.dp))
+                    .background(
+                        Brush.verticalGradient(
+                            listOf(Color(0xFFFFFFFF), Color(0xFFFDFCF8), Color(0xFFF9F5EC))
+                        )
+                    )
+                    .border(
+                        BorderStroke(
+                            1.dp,
+                            Brush.verticalGradient(
+                                listOf(Color(0xFFFFFFFF), Color(0xFFE8E0D4))
+                            )
+                        ),
+                        RoundedCornerShape(18.dp)
+                    )
                     .testTag("profile_permissions_card")
             ) {
-                if (allPermissionsGranted) {
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    if (allPermissionsGranted) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 14.dp, vertical = 9.dp)
+                                .testTag("permission_row_all_allowed"),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            // 3D Popped Success Emerald Icon Pebble
+                            Box(
+                                modifier = Modifier
+                                    .size(36.dp)
+                                    .shadow(
+                                        elevation = 3.dp,
+                                        shape = RoundedCornerShape(11.dp),
+                                        ambientColor = Color(0x266B8F5A),
+                                        spotColor = Color(0x266B8F5A)
+                                    )
+                                    .clip(RoundedCornerShape(11.dp))
+                                    .background(
+                                        Brush.verticalGradient(
+                                            listOf(
+                                                Color(0xFF6B8F5A).copy(alpha = 0.22f),
+                                                Color(0xFF6B8F5A).copy(alpha = 0.12f)
+                                            )
+                                        )
+                                    )
+                                    .border(
+                                        BorderStroke(1.dp, Color(0xFF6B8F5A).copy(alpha = 0.35f)),
+                                        RoundedCornerShape(11.dp)
+                                    ),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Check,
+                                    contentDescription = "All permissions allowed",
+                                    tint = Color(0xFF537544),
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
+
+                            Spacer(modifier = Modifier.width(12.dp))
+
+                            Text(
+                                text = "All permissions allowed",
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = Color(0xFF2C2420),
+                                modifier = Modifier.weight(1f)
+                            )
+
+                            // Glowing Green Status Pill Indicator
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .background(Color(0xFF6B8F5A).copy(alpha = 0.15f))
+                                    .border(0.8.dp, Color(0xFF6B8F5A).copy(alpha = 0.3f), RoundedCornerShape(10.dp))
+                                    .padding(horizontal = 7.dp, vertical = 3.dp)
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(5.dp)
+                                            .clip(CircleShape)
+                                            .background(Color(0xFF6B8F5A))
+                                    )
+                                    Text(
+                                        text = "Active",
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = Color(0xFF537544)
+                                    )
+                                }
+                            }
+                        }
+                    } else {
+                        Column(modifier = Modifier.fillMaxWidth()) {
+                            val missingRows = mutableListOf<MissingPermissionEntry>()
+
+                            if (!hasMicPermission) {
+                                missingRows.add(
+                                    MissingPermissionEntry(
+                                        tag = "permission_row_mic_missing",
+                                        label = "Microphone not allowed",
+                                        onClick = {
+                                            micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                                        }
+                                    )
+                                )
+                            }
+
+                            if (!hasPhoneStatePermission) {
+                                missingRows.add(
+                                    MissingPermissionEntry(
+                                        tag = "permission_row_phone_state_missing",
+                                        label = "Phone state not allowed",
+                                        onClick = {
+                                            phoneStatePermissionLauncher.launch(Manifest.permission.READ_PHONE_STATE)
+                                        }
+                                    )
+                                )
+                            }
+
+                            if (!hasOverlayPermission) {
+                                missingRows.add(
+                                    MissingPermissionEntry(
+                                        tag = "permission_row_overlay_missing",
+                                        label = "Display over other apps not allowed",
+                                        onClick = {
+                                            PermissionHelper.openOverlaySettings(context)
+                                        }
+                                    )
+                                )
+                            }
+
+                            if (!hasNotificationPermission) {
+                                missingRows.add(
+                                    MissingPermissionEntry(
+                                        tag = "permission_row_notifications_missing",
+                                        label = "Notifications not allowed",
+                                        onClick = {
+                                            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+                                                notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                                            } else {
+                                                PermissionHelper.openNotificationSettings(context)
+                                            }
+                                        }
+                                    )
+                                )
+                            }
+
+                            if (!hasExactAlarmPermission) {
+                                missingRows.add(
+                                    MissingPermissionEntry(
+                                        tag = "permission_row_exact_alarm_missing",
+                                        label = "Exact alarm not allowed",
+                                        onClick = {
+                                            PermissionHelper.openExactAlarmSettings(context)
+                                        }
+                                    )
+                                )
+                            }
+
+                            missingRows.forEachIndexed { index, rowItem ->
+                                if (index > 0) {
+                                    HorizontalDivider(
+                                        color = Color(0xFFE8E0D4).copy(alpha = 0.7f),
+                                        thickness = 1.dp,
+                                        modifier = Modifier.padding(horizontal = 14.dp)
+                                    )
+                                }
+
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable { rowItem.onClick() }
+                                        .padding(horizontal = 14.dp, vertical = 9.dp)
+                                        .testTag(rowItem.tag),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(36.dp)
+                                            .clip(RoundedCornerShape(11.dp))
+                                            .background(Color(0xFFB4574E).copy(alpha = 0.12f))
+                                            .border(1.dp, Color(0xFFB4574E).copy(alpha = 0.25f), RoundedCornerShape(11.dp)),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Canvas(modifier = Modifier.size(16.dp)) {
+                                            val w = size.width
+                                            val h = size.height
+                                            drawLine(
+                                                color = Color(0xFFB4574E),
+                                                start = Offset(w / 2f, h * 0.15f),
+                                                end = Offset(w / 2f, h * 0.60f),
+                                                strokeWidth = 2.2.dp.toPx(),
+                                                cap = StrokeCap.Round
+                                            )
+                                            drawCircle(
+                                                color = Color(0xFFB4574E),
+                                                radius = 1.5.dp.toPx(),
+                                                center = Offset(w / 2f, h * 0.82f)
+                                            )
+                                        }
+                                    }
+
+                                    Spacer(modifier = Modifier.width(12.dp))
+
+                                    Text(
+                                        text = rowItem.label,
+                                        fontSize = 13.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = Color(0xFFB4574E),
+                                        modifier = Modifier.weight(1f)
+                                    )
+
+                                    Icon(
+                                        imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                                        contentDescription = rowItem.label,
+                                        tint = Color(0xFFB4574E),
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    // Soft Hairline Divider between Permissions and Gemini API Key
+                    HorizontalDivider(
+                        color = Color(0xFFE8E0D4).copy(alpha = 0.7f),
+                        thickness = 1.dp,
+                        modifier = Modifier.padding(horizontal = 14.dp)
+                    )
+
+                    // Gemini API Key Confirmation Row (3D Popped Row with Tactile Badge)
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(horizontal = 20.dp, vertical = 16.dp)
-                            .testTag("permission_row_all_allowed"),
+                            .clickable { showKeySheet = true }
+                            .padding(horizontal = 14.dp, vertical = 9.dp)
+                            .testTag("profile_gemini_api_key_row"),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Box(
-                            modifier = Modifier
-                                .size(40.dp)
-                                .clip(CircleShape)
-                                .background(Color(0xFF6B8F5A).copy(alpha = 0.14f)),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Check,
-                                contentDescription = "All permissions allowed",
-                                tint = Color(0xFF6B8F5A),
-                                modifier = Modifier.size(20.dp)
-                            )
-                        }
-
-                        Spacer(modifier = Modifier.width(14.dp))
-
-                        Text(
-                            text = "All permissions allowed",
-                            fontSize = 15.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            color = Color(0xFF2C2420),
-                            modifier = Modifier.weight(1f)
-                        )
-
-                        Box(
-                            modifier = Modifier
-                                .size(8.dp)
-                                .clip(CircleShape)
-                                .background(Color(0xFF6B8F5A))
-                        )
-                    }
-                } else {
-                    Column(modifier = Modifier.fillMaxWidth()) {
-                        val missingRows = mutableListOf<MissingPermissionEntry>()
-
-                        if (!hasMicPermission) {
-                            missingRows.add(
-                                MissingPermissionEntry(
-                                    tag = "permission_row_mic_missing",
-                                    label = "Microphone not allowed",
-                                    onClick = {
-                                        micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
-                                    }
-                                )
-                            )
-                        }
-
-                        if (!hasPhoneStatePermission) {
-                            missingRows.add(
-                                MissingPermissionEntry(
-                                    tag = "permission_row_phone_state_missing",
-                                    label = "Phone state not allowed",
-                                    onClick = {
-                                        phoneStatePermissionLauncher.launch(Manifest.permission.READ_PHONE_STATE)
-                                    }
-                                )
-                            )
-                        }
-
-                        if (!hasOverlayPermission) {
-                            missingRows.add(
-                                MissingPermissionEntry(
-                                    tag = "permission_row_overlay_missing",
-                                    label = "Display over other apps not allowed",
-                                    onClick = {
-                                        PermissionHelper.openOverlaySettings(context)
-                                    }
-                                )
-                            )
-                        }
-
-                        if (!hasNotificationPermission) {
-                            missingRows.add(
-                                MissingPermissionEntry(
-                                    tag = "permission_row_notifications_missing",
-                                    label = "Notifications not allowed",
-                                    onClick = {
-                                        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
-                                            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-                                        } else {
-                                            PermissionHelper.openNotificationSettings(context)
-                                        }
-                                    }
-                                )
-                            )
-                        }
-
-                        if (!hasExactAlarmPermission) {
-                            missingRows.add(
-                                MissingPermissionEntry(
-                                    tag = "permission_row_exact_alarm_missing",
-                                    label = "Exact alarm not allowed",
-                                    onClick = {
-                                        PermissionHelper.openExactAlarmSettings(context)
-                                    }
-                                )
-                            )
-                        }
-
-                        missingRows.forEachIndexed { index, rowItem ->
-                            if (index > 0) {
-                                HorizontalDivider(
-                                    color = Color(0xFFE8E0D4),
-                                    thickness = 1.dp,
-                                    modifier = Modifier.padding(horizontal = 20.dp)
-                                )
-                            }
-
-                            Row(
+                        if (hasApiKey) {
+                            Box(
                                 modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clickable { rowItem.onClick() }
-                                    .padding(horizontal = 20.dp, vertical = 14.dp)
-                                    .testTag(rowItem.tag),
-                                verticalAlignment = Alignment.CenterVertically
+                                    .size(36.dp)
+                                    .shadow(
+                                        elevation = 3.dp,
+                                        shape = RoundedCornerShape(11.dp),
+                                        ambientColor = Color(0x266B8F5A),
+                                        spotColor = Color(0x266B8F5A)
+                                    )
+                                    .clip(RoundedCornerShape(11.dp))
+                                    .background(
+                                        Brush.verticalGradient(
+                                            listOf(
+                                                Color(0xFF6B8F5A).copy(alpha = 0.22f),
+                                                Color(0xFF6B8F5A).copy(alpha = 0.12f)
+                                            )
+                                        )
+                                    )
+                                    .border(
+                                        BorderStroke(1.dp, Color(0xFF6B8F5A).copy(alpha = 0.35f)),
+                                        RoundedCornerShape(11.dp)
+                                    ),
+                                contentAlignment = Alignment.Center
                             ) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(40.dp)
-                                        .clip(CircleShape)
-                                        .background(Color(0xFFB4574E).copy(alpha = 0.12f)),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Canvas(modifier = Modifier.size(18.dp)) {
-                                        val w = size.width
-                                        val h = size.height
-                                        drawLine(
-                                            color = Color(0xFFB4574E),
-                                            start = Offset(w / 2f, h * 0.15f),
-                                            end = Offset(w / 2f, h * 0.60f),
-                                            strokeWidth = 2.4.dp.toPx(),
-                                            cap = StrokeCap.Round
-                                        )
-                                        drawCircle(
-                                            color = Color(0xFFB4574E),
-                                            radius = 1.6.dp.toPx(),
-                                            center = Offset(w / 2f, h * 0.82f)
-                                        )
-                                    }
-                                }
-
-                                Spacer(modifier = Modifier.width(14.dp))
-
-                                Text(
-                                    text = rowItem.label,
-                                    fontSize = 15.sp,
-                                    fontWeight = FontWeight.SemiBold,
-                                    color = Color(0xFFB4574E),
-                                    modifier = Modifier.weight(1f)
-                                )
-
                                 Icon(
-                                    imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                                    contentDescription = rowItem.label,
-                                    tint = Color(0xFFB4574E),
-                                    modifier = Modifier.size(20.dp)
+                                    imageVector = Icons.Default.Key,
+                                    contentDescription = "Gemini API Key active",
+                                    tint = Color(0xFF537544),
+                                    modifier = Modifier.size(18.dp)
                                 )
                             }
+
+                            Spacer(modifier = Modifier.width(12.dp))
+
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "Gemini API Key",
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = Color(0xFF2C2420)
+                                )
+                                Text(
+                                    text = "Live Voice prayer active",
+                                    fontSize = 11.sp,
+                                    color = Color(0xFF537544),
+                                    fontWeight = FontWeight.Medium
+                                )
+                            }
+
+                            // Glowing Green Active Pill
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .background(Color(0xFF6B8F5A).copy(alpha = 0.15f))
+                                    .border(0.8.dp, Color(0xFF6B8F5A).copy(alpha = 0.3f), RoundedCornerShape(10.dp))
+                                    .padding(horizontal = 7.dp, vertical = 3.dp)
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(5.dp)
+                                            .clip(CircleShape)
+                                            .background(Color(0xFF6B8F5A))
+                                    )
+                                    Text(
+                                        text = "Ready",
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = Color(0xFF537544)
+                                    )
+                                }
+                            }
+                        } else {
+                            Box(
+                                modifier = Modifier
+                                    .size(36.dp)
+                                    .clip(RoundedCornerShape(11.dp))
+                                    .background(Color(0xFFB4574E).copy(alpha = 0.12f))
+                                    .border(1.dp, Color(0xFFB4574E).copy(alpha = 0.25f), RoundedCornerShape(11.dp)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Key,
+                                    contentDescription = "Gemini API Key required",
+                                    tint = Color(0xFFB4574E),
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
+
+                            Spacer(modifier = Modifier.width(12.dp))
+
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "Gemini API Key",
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = Color(0xFFB4574E)
+                                )
+                                Text(
+                                    text = "Tap to enter key & start praying",
+                                    fontSize = 11.sp,
+                                    color = Color(0xFF8B7E72)
+                                )
+                            }
+
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                                contentDescription = "Configure Key",
+                                tint = Color(0xFFB4574E),
+                                modifier = Modifier.size(18.dp)
+                            )
                         }
                     }
                 }
             }
 
-            Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(10.dp))
 
-            // ════ SECTION 3 — YOUR MORNING CARD ════
+            // ════ SECTION 3 — YOUR MORNING CARD (POPPED 3D SATIN CONTAINER) ════
             SectionHeaderLabel(text = "YOUR MORNING")
-            Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(4.dp))
 
-            Card(
-                shape = RoundedCornerShape(16.dp),
-                colors = CardDefaults.cardColors(containerColor = Color(0xFFFDFCF8)),
-                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
-                border = BorderStroke(1.dp, Color(0xFFE8E0D4)),
+            Box(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .shadow(
+                        elevation = 5.dp,
+                        shape = RoundedCornerShape(18.dp),
+                        ambientColor = Color(0x1F2C2420),
+                        spotColor = Color(0x1F2C2420)
+                    )
+                    .clip(RoundedCornerShape(18.dp))
+                    .background(
+                        Brush.verticalGradient(
+                            listOf(Color(0xFFFFFFFF), Color(0xFFFDFCF8), Color(0xFFF9F5EC))
+                        )
+                    )
+                    .border(
+                        BorderStroke(
+                            1.dp,
+                            Brush.verticalGradient(
+                                listOf(Color(0xFFFFFFFF), Color(0xFFE8E0D4))
+                            )
+                        ),
+                        RoundedCornerShape(18.dp)
+                    )
                     .testTag("profile_morning_card")
             ) {
                 Column(modifier = Modifier.fillMaxWidth()) {
@@ -833,86 +1339,134 @@ fun ProfileScreen(
                                 )
                                 picker.show()
                             }
-                            .padding(horizontal = 20.dp, vertical = 16.dp),
+                            .padding(horizontal = 14.dp, vertical = 9.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        // 40dp terracotta-tinted icon circle
+                        // 3D Popped Pebble Icon Container with Terracotta Tint
                         Box(
                             modifier = Modifier
-                                .size(40.dp)
-                                .clip(CircleShape)
-                                .background(Color(0xFFB4574E).copy(alpha = 0.12f)),
+                                .size(36.dp)
+                                .shadow(
+                                    elevation = 3.dp,
+                                    shape = RoundedCornerShape(11.dp),
+                                    ambientColor = Color(0x26B4574E),
+                                    spotColor = Color(0x26B4574E)
+                                )
+                                .clip(RoundedCornerShape(11.dp))
+                                .background(
+                                    Brush.verticalGradient(
+                                        listOf(
+                                            Color(0xFFB4574E).copy(alpha = 0.20f),
+                                            Color(0xFFB4574E).copy(alpha = 0.10f)
+                                        )
+                                    )
+                                )
+                                .border(
+                                    BorderStroke(1.dp, Color(0xFFB4574E).copy(alpha = 0.28f)),
+                                    RoundedCornerShape(11.dp)
+                                ),
                             contentAlignment = Alignment.Center
                         ) {
                             Icon(
                                 painter = painterResource(id = R.drawable.ic_clock_terracotta),
                                 contentDescription = "Prayer Time",
                                 tint = Color(0xFFB4574E),
-                                modifier = Modifier.size(20.dp)
+                                modifier = Modifier.size(18.dp)
                             )
                         }
 
-                        Spacer(modifier = Modifier.width(14.dp))
+                        Spacer(modifier = Modifier.width(12.dp))
 
                         Text(
                             text = "Prayer Time",
-                            fontSize = 15.sp,
+                            fontSize = 14.sp,
                             fontWeight = FontWeight.SemiBold,
                             color = Color(0xFF2C2420),
                             modifier = Modifier.weight(1f)
                         )
 
-                        Text(
-                            text = prayerTimeString,
-                            fontSize = 14.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = Color(0xFFB4574E),
-                            modifier = Modifier.padding(end = 6.dp)
-                        )
+                        // Popped Terracotta Time Badge
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(Color(0xFFB4574E).copy(alpha = 0.12f))
+                                .border(1.dp, Color(0xFFB4574E).copy(alpha = 0.25f), RoundedCornerShape(8.dp))
+                                .padding(horizontal = 8.dp, vertical = 3.dp)
+                        ) {
+                            Text(
+                                text = prayerTimeString,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFFB4574E)
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.width(4.dp))
 
                         Icon(
                             imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
                             contentDescription = "Edit Time",
                             tint = Color(0xFF8B7E72),
-                            modifier = Modifier.size(20.dp)
+                            modifier = Modifier.size(16.dp)
                         )
                     }
 
-                    HorizontalDivider(color = Color(0xFFE8E0D4), thickness = 1.dp, modifier = Modifier.padding(horizontal = 20.dp))
+                    HorizontalDivider(
+                        color = Color(0xFFE8E0D4).copy(alpha = 0.7f),
+                        thickness = 1.dp,
+                        modifier = Modifier.padding(horizontal = 14.dp)
+                    )
 
                     // Row 2: Reminder
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(horizontal = 20.dp, vertical = 16.dp),
+                            .padding(horizontal = 14.dp, vertical = 9.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        // 40dp terracotta-tinted icon circle with vector Bell
+                        // 3D Popped Pebble Icon Container with Bell
                         Box(
                             modifier = Modifier
-                                .size(40.dp)
-                                .clip(CircleShape)
-                                .background(Color(0xFFB4574E).copy(alpha = 0.12f)),
+                                .size(36.dp)
+                                .shadow(
+                                    elevation = 3.dp,
+                                    shape = RoundedCornerShape(11.dp),
+                                    ambientColor = Color(0x26B4574E),
+                                    spotColor = Color(0x26B4574E)
+                                )
+                                .clip(RoundedCornerShape(11.dp))
+                                .background(
+                                    Brush.verticalGradient(
+                                        listOf(
+                                            Color(0xFFB4574E).copy(alpha = 0.20f),
+                                            Color(0xFFB4574E).copy(alpha = 0.10f)
+                                        )
+                                    )
+                                )
+                                .border(
+                                    BorderStroke(1.dp, Color(0xFFB4574E).copy(alpha = 0.28f)),
+                                    RoundedCornerShape(11.dp)
+                                ),
                             contentAlignment = Alignment.Center
                         ) {
                             BellIcon(
                                 tint = Color(0xFFB4574E),
-                                modifier = Modifier.size(20.dp)
+                                modifier = Modifier.size(18.dp)
                             )
                         }
 
-                        Spacer(modifier = Modifier.width(14.dp))
+                        Spacer(modifier = Modifier.width(12.dp))
 
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
                                 text = "Reminder",
-                                fontSize = 15.sp,
+                                fontSize = 14.sp,
                                 fontWeight = FontWeight.SemiBold,
                                 color = Color(0xFF2C2420)
                             )
                             Text(
                                 text = "Heads-up before your prayer time",
-                                fontSize = 12.sp,
+                                fontSize = 11.sp,
                                 color = Color(0xFF8B7E72)
                             )
                         }
@@ -935,42 +1489,63 @@ fun ProfileScreen(
                         )
                     }
 
-                    HorizontalDivider(color = Color(0xFFE8E0D4), thickness = 1.dp, modifier = Modifier.padding(horizontal = 20.dp))
+                    HorizontalDivider(
+                        color = Color(0xFFE8E0D4).copy(alpha = 0.7f),
+                        thickness = 1.dp,
+                        modifier = Modifier.padding(horizontal = 14.dp)
+                    )
 
                     // Row 3: Snooze Options
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
                             .clickable { showSnoozeDialog = true }
-                            .padding(horizontal = 20.dp, vertical = 16.dp),
+                            .padding(horizontal = 14.dp, vertical = 9.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        // 40dp terracotta-tinted icon circle with Moon
+                        // 3D Popped Pebble Icon Container with Moon
                         Box(
                             modifier = Modifier
-                                .size(40.dp)
-                                .clip(CircleShape)
-                                .background(Color(0xFFB4574E).copy(alpha = 0.12f)),
+                                .size(36.dp)
+                                .shadow(
+                                    elevation = 3.dp,
+                                    shape = RoundedCornerShape(11.dp),
+                                    ambientColor = Color(0x26B4574E),
+                                    spotColor = Color(0x26B4574E)
+                                )
+                                .clip(RoundedCornerShape(11.dp))
+                                .background(
+                                    Brush.verticalGradient(
+                                        listOf(
+                                            Color(0xFFB4574E).copy(alpha = 0.20f),
+                                            Color(0xFFB4574E).copy(alpha = 0.10f)
+                                        )
+                                    )
+                                )
+                                .border(
+                                    BorderStroke(1.dp, Color(0xFFB4574E).copy(alpha = 0.28f)),
+                                    RoundedCornerShape(11.dp)
+                                ),
                             contentAlignment = Alignment.Center
                         ) {
                             MoonIcon(
                                 tint = Color(0xFFB4574E),
-                                modifier = Modifier.size(19.dp)
+                                modifier = Modifier.size(17.dp)
                             )
                         }
 
-                        Spacer(modifier = Modifier.width(14.dp))
+                        Spacer(modifier = Modifier.width(12.dp))
 
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
                                 text = "Snooze Options",
-                                fontSize = 15.sp,
+                                fontSize = 14.sp,
                                 fontWeight = FontWeight.SemiBold,
                                 color = Color(0xFF2C2420)
                             )
                             Text(
                                 text = snoozeOptionsSummary,
-                                fontSize = 12.sp,
+                                fontSize = 11.sp,
                                 color = Color(0xFF8B7E72),
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis
@@ -981,17 +1556,17 @@ fun ProfileScreen(
                             imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
                             contentDescription = "Edit Snooze",
                             tint = Color(0xFF8B7E72),
-                            modifier = Modifier.size(20.dp)
+                            modifier = Modifier.size(16.dp)
                         )
                     }
                 }
             }
 
-            Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(10.dp))
 
-            // ════ SECTION 4 — YOUR LOCK SCREEN CARD ════
+            // ════ SECTION 4 — YOUR LOCK SCREEN CARD (POPPED 3D GLOSSY CONTAINER) ════
             SectionHeaderLabel(text = "YOUR LOCK SCREEN")
-            Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(4.dp))
 
             val displayVerse = if (currentVerseText.trim().isNotEmpty()) {
                 currentVerseText
@@ -999,19 +1574,36 @@ fun ProfileScreen(
                 "This is the day the Lord has made; let us rejoice and be glad in it."
             }
 
-            Card(
-                shape = RoundedCornerShape(16.dp),
-                colors = CardDefaults.cardColors(containerColor = Color(0xFFFDFCF8)),
-                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
-                border = BorderStroke(1.dp, Color(0xFFE8E0D4)),
+            Box(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .shadow(
+                        elevation = 5.dp,
+                        shape = RoundedCornerShape(18.dp),
+                        ambientColor = Color(0x1F2C2420),
+                        spotColor = Color(0x1F2C2420)
+                    )
+                    .clip(RoundedCornerShape(18.dp))
+                    .background(
+                        Brush.verticalGradient(
+                            listOf(Color(0xFFFFFFFF), Color(0xFFFDFCF8), Color(0xFFF9F5EC))
+                        )
+                    )
+                    .border(
+                        BorderStroke(
+                            1.dp,
+                            Brush.verticalGradient(
+                                listOf(Color(0xFFFFFFFF), Color(0xFFE8E0D4))
+                            )
+                        ),
+                        RoundedCornerShape(18.dp)
+                    )
                     .testTag("profile_lock_screen_card")
             ) {
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(20.dp)
+                        .padding(14.dp)
                 ) {
                     // Row 1: Memory verse on lock screen header + switch
                     Row(
@@ -1022,33 +1614,33 @@ fun ProfileScreen(
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
                                 text = "Memory verse on lock screen",
-                                fontSize = 15.sp,
+                                fontSize = 14.sp,
                                 fontWeight = FontWeight.SemiBold,
                                 color = Color(0xFF2C2420)
                             )
-                            Spacer(modifier = Modifier.height(2.dp))
+                            Spacer(modifier = Modifier.height(1.dp))
                             if (!isVerseSetupComplete) {
                                 Text(
                                     text = "Not set up yet.",
-                                    fontSize = 12.sp,
+                                    fontSize = 11.sp,
                                     color = Color(0xFF8B7E72)
                                 )
                             } else {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                     Box(
                                         modifier = Modifier
-                                            .size(7.dp)
+                                            .size(6.dp)
                                             .clip(CircleShape)
                                             .background(
                                                 if (isVerseEnabled) Color(0xFF6B8F5A) else Color(0xFF8B7E72)
                                             )
                                     )
-                                    Spacer(modifier = Modifier.width(5.dp))
+                                    Spacer(modifier = Modifier.width(4.dp))
                                     Text(
                                         text = if (isVerseEnabled) "Ready" else "Turned off",
-                                        fontSize = 12.sp,
+                                        fontSize = 11.sp,
                                         fontWeight = FontWeight.Medium,
-                                        color = if (isVerseEnabled) Color(0xFF6B8F5A) else Color(0xFF8B7E72)
+                                        color = if (isVerseEnabled) Color(0xFF537544) else Color(0xFF8B7E72)
                                     )
                                 }
                             }
@@ -1079,41 +1671,71 @@ fun ProfileScreen(
                         )
                     }
 
-                    Spacer(modifier = Modifier.height(14.dp))
+                    Spacer(modifier = Modifier.height(10.dp))
 
                     if (!isVerseSetupComplete) {
                         // ─── STATE A: NOT SET UP ───
-                        // Default dark wallpaper preview container
+                        // 3D Liquid Glass Mockup Preview Container
                         Box(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .height(160.dp)
+                                .height(140.dp)
+                                .shadow(
+                                    elevation = 6.dp,
+                                    shape = RoundedCornerShape(16.dp),
+                                    ambientColor = Color(0x33000000),
+                                    spotColor = Color(0x33000000)
+                                )
                                 .clip(RoundedCornerShape(16.dp))
-                                .border(1.dp, Color(0xFFE8E0D4), RoundedCornerShape(16.dp))
+                                .border(
+                                    BorderStroke(
+                                        1.dp,
+                                        Brush.verticalGradient(
+                                            listOf(Color(0x4DFFFFFF), Color(0x1AE8E0D4))
+                                        )
+                                    ),
+                                    RoundedCornerShape(16.dp)
+                                )
                                 .background(
-                                    androidx.compose.ui.graphics.Brush.verticalGradient(
-                                        listOf(Color(0xFF0F172A), Color(0xFF1E293B), Color(0xFF090D16))
+                                    Brush.verticalGradient(
+                                        listOf(Color(0xFF1E293B), Color(0xFF0F172A), Color(0xFF090D16))
                                     )
                                 )
                                 .clickable { showSetupSheet = true }
                                 .testTag("preview_not_set_up")
                         ) {
+                            // Specular Liquid Glass Top Rim Reflection
+                            Canvas(modifier = Modifier.fillMaxSize()) {
+                                val w = size.width
+                                val h = size.height
+                                drawRoundRect(
+                                    brush = Brush.verticalGradient(
+                                        listOf(Color.White.copy(alpha = 0.15f), Color.Transparent),
+                                        startY = 0f,
+                                        endY = h * 0.35f
+                                    ),
+                                    size = size,
+                                    cornerRadius = androidx.compose.ui.geometry.CornerRadius(16.dp.toPx())
+                                )
+                            }
+
                             // Mini Lock Screen Clock
                             Column(
                                 modifier = Modifier
                                     .align(Alignment.TopCenter)
-                                    .padding(top = 12.dp),
+                                    .padding(top = 10.dp),
                                 horizontalAlignment = Alignment.CenterHorizontally
                             ) {
                                 Text(
                                     text = "09:41",
-                                    fontSize = 18.sp,
+                                    fontSize = 16.sp,
                                     fontWeight = FontWeight.Medium,
-                                    color = Color.White.copy(alpha = 0.8f)
+                                    color = Color.White.copy(alpha = 0.85f),
+                                    style = TextStyle(shadow = Shadow(color = Color.Black.copy(alpha = 0.4f), blurRadius = 4f))
                                 )
                                 Text(
                                     text = "Wed, 12 Aug",
-                                    fontSize = 10.sp,
+                                    fontSize = 9.sp,
                                     color = Color.White.copy(alpha = 0.6f)
                                 )
                             }
@@ -1124,38 +1746,39 @@ fun ProfileScreen(
                                 style = TextStyle(
                                     fontFamily = FontFamily.Serif,
                                     fontStyle = FontStyle.Italic,
-                                    fontSize = 13.sp,
+                                    fontSize = 12.sp,
                                     color = Color.White.copy(alpha = 0.95f),
                                     textAlign = TextAlign.Center,
-                                    lineHeight = 18.sp,
-                                    shadow = Shadow(color = Color.Black.copy(alpha = 0.5f), blurRadius = 4f)
+                                    lineHeight = 16.sp,
+                                    shadow = Shadow(color = Color.Black.copy(alpha = 0.6f), blurRadius = 6f)
                                 ),
                                 modifier = Modifier
                                     .align(Alignment.Center)
-                                    .padding(horizontal = 20.dp)
+                                    .padding(horizontal = 16.dp)
                             )
 
                             // Bottom Hint Pill
                             Box(
                                 modifier = Modifier
                                     .align(Alignment.BottomCenter)
-                                    .padding(bottom = 10.dp)
+                                    .padding(bottom = 8.dp)
                                     .clip(RoundedCornerShape(12.dp))
-                                    .background(Color.White.copy(alpha = 0.18f))
-                                    .padding(horizontal = 10.dp, vertical = 4.dp)
+                                    .background(Color.White.copy(alpha = 0.22f))
+                                    .border(0.8.dp, Color.White.copy(alpha = 0.35f), RoundedCornerShape(12.dp))
+                                    .padding(horizontal = 10.dp, vertical = 3.dp)
                             ) {
                                 Text(
                                     text = "Tap to set up",
-                                    fontSize = 11.sp,
-                                    fontWeight = FontWeight.Medium,
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.SemiBold,
                                     color = Color.White
                                 )
                             }
                         }
 
-                        Spacer(modifier = Modifier.height(14.dp))
-                        HorizontalDivider(color = Color(0xFFE8E0D4), thickness = 1.dp)
-                        Spacer(modifier = Modifier.height(14.dp))
+                        Spacer(modifier = Modifier.height(10.dp))
+                        HorizontalDivider(color = Color(0xFFE8E0D4).copy(alpha = 0.7f), thickness = 1.dp)
+                        Spacer(modifier = Modifier.height(10.dp))
 
                         // Setup Action Row
                         Row(
@@ -1167,24 +1790,25 @@ fun ProfileScreen(
                         ) {
                             Box(
                                 modifier = Modifier
-                                    .size(36.dp)
-                                    .clip(CircleShape)
-                                    .background(Color(0xFFB4574E).copy(alpha = 0.12f)),
+                                    .size(34.dp)
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .background(Color(0xFFB4574E).copy(alpha = 0.12f))
+                                    .border(1.dp, Color(0xFFB4574E).copy(alpha = 0.25f), RoundedCornerShape(10.dp)),
                                 contentAlignment = Alignment.Center
                             ) {
                                 Icon(
                                     imageVector = Icons.Default.Image,
                                     contentDescription = "Set up",
                                     tint = Color(0xFFB4574E),
-                                    modifier = Modifier.size(18.dp)
+                                    modifier = Modifier.size(16.dp)
                                 )
                             }
 
-                            Spacer(modifier = Modifier.width(12.dp))
+                            Spacer(modifier = Modifier.width(10.dp))
 
                             Text(
                                 text = "Set up lock screen verse",
-                                fontSize = 14.sp,
+                                fontSize = 13.sp,
                                 fontWeight = FontWeight.SemiBold,
                                 color = Color(0xFF2C2420),
                                 modifier = Modifier.weight(1f)
@@ -1194,18 +1818,32 @@ fun ProfileScreen(
                                 imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
                                 contentDescription = "Set up",
                                 tint = Color(0xFF8B7E72),
-                                modifier = Modifier.size(20.dp)
+                                modifier = Modifier.size(16.dp)
                             )
                         }
                     } else {
                         // ─── STATE B: ALREADY SET UP ───
-                        // User's saved base wallpaper preview container
+                        // 3D Liquid Glass Mockup Preview Container
                         Box(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .height(175.dp)
+                                .height(150.dp)
+                                .shadow(
+                                    elevation = 6.dp,
+                                    shape = RoundedCornerShape(16.dp),
+                                    ambientColor = Color(0x33000000),
+                                    spotColor = Color(0x33000000)
+                                )
                                 .clip(RoundedCornerShape(16.dp))
-                                .border(1.dp, Color(0xFFE8E0D4), RoundedCornerShape(16.dp))
+                                .border(
+                                    BorderStroke(
+                                        1.dp,
+                                        Brush.verticalGradient(
+                                            listOf(Color(0x4DFFFFFF), Color(0x1AE8E0D4))
+                                        )
+                                    ),
+                                    RoundedCornerShape(16.dp)
+                                )
                                 .background(Color(0xFF0F172A))
                                 .clickable { onOpenVerseEditor() }
                                 .testTag("preview_already_set_up")
@@ -1222,8 +1860,8 @@ fun ProfileScreen(
                                 modifier = Modifier
                                     .fillMaxSize()
                                     .background(
-                                        androidx.compose.ui.graphics.Brush.verticalGradient(
-                                            listOf(Color(0xFF0F172A), Color(0xFF1E293B), Color(0xFF090D16))
+                                        Brush.verticalGradient(
+                                            listOf(Color(0xFF1E293B), Color(0xFF0F172A), Color(0xFF090D16))
                                         )
                                     )
                             )
@@ -1232,12 +1870,12 @@ fun ProfileScreen(
                             Column(
                                 modifier = Modifier
                                     .align(Alignment.TopCenter)
-                                    .padding(top = 10.dp),
+                                    .padding(top = 8.dp),
                                 horizontalAlignment = Alignment.CenterHorizontally
                             ) {
                                 Text(
                                     text = "09:41",
-                                    fontSize = 17.sp,
+                                    fontSize = 15.sp,
                                     fontWeight = FontWeight.Medium,
                                     color = Color.White.copy(alpha = 0.85f),
                                     style = TextStyle(shadow = Shadow(color = Color.Black.copy(alpha = 0.4f), blurRadius = 4f))
@@ -1258,15 +1896,15 @@ fun ProfileScreen(
                             }
                             val fontSty = if (currentVerseStyle == "Classic") FontStyle.Italic else FontStyle.Normal
                             val baseSizeSp = when (currentVerseSize) {
-                                "Small" -> 11.sp
-                                "Large" -> 15.sp
-                                else -> 13.sp
+                                "Small" -> 10.sp
+                                "Large" -> 14.sp
+                                else -> 12.sp
                             }
 
                             Box(
                                 modifier = Modifier
                                     .align(Alignment.Center)
-                                    .padding(horizontal = 18.dp)
+                                    .padding(horizontal = 16.dp)
                             ) {
                                 Text(
                                     text = "\"$displayVerse\"",
@@ -1284,26 +1922,27 @@ fun ProfileScreen(
                                 )
                             }
 
-                            // Bottom Hint Pill
+                            // Bottom Hint Pill (Popped Liquid Glass Pill)
                             Box(
                                 modifier = Modifier
                                     .align(Alignment.BottomCenter)
-                                    .padding(bottom = 8.dp)
+                                    .padding(bottom = 6.dp)
                                     .clip(RoundedCornerShape(12.dp))
-                                    .background(Color.Black.copy(alpha = 0.45f))
-                                    .padding(horizontal = 10.dp, vertical = 4.dp)
+                                    .background(Color.Black.copy(alpha = 0.50f))
+                                    .border(0.8.dp, Color.White.copy(alpha = 0.25f), RoundedCornerShape(12.dp))
+                                    .padding(horizontal = 10.dp, vertical = 3.dp)
                             ) {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                     Icon(
                                         imageVector = Icons.Default.Edit,
                                         contentDescription = null,
                                         tint = Color.White.copy(alpha = 0.9f),
-                                        modifier = Modifier.size(12.dp)
+                                        modifier = Modifier.size(11.dp)
                                     )
-                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Spacer(modifier = Modifier.width(3.dp))
                                     Text(
                                         text = "Tap to adjust photo & position",
-                                        fontSize = 10.sp,
+                                        fontSize = 9.sp,
                                         fontWeight = FontWeight.Medium,
                                         color = Color.White.copy(alpha = 0.9f)
                                     )
@@ -1311,9 +1950,9 @@ fun ProfileScreen(
                             }
                         }
 
-                        Spacer(modifier = Modifier.height(14.dp))
-                        HorizontalDivider(color = Color(0xFFE8E0D4), thickness = 1.dp)
-                        Spacer(modifier = Modifier.height(14.dp))
+                        Spacer(modifier = Modifier.height(10.dp))
+                        HorizontalDivider(color = Color(0xFFE8E0D4).copy(alpha = 0.7f), thickness = 1.dp)
+                        Spacer(modifier = Modifier.height(10.dp))
 
                         // "Customize text" row (Palette icon -> opens TextOptionsSheet directly)
                         Row(
@@ -1325,29 +1964,30 @@ fun ProfileScreen(
                         ) {
                             Box(
                                 modifier = Modifier
-                                    .size(36.dp)
-                                    .clip(CircleShape)
-                                    .background(Color(0xFFB4574E).copy(alpha = 0.12f)),
+                                    .size(34.dp)
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .background(Color(0xFFB4574E).copy(alpha = 0.12f))
+                                    .border(1.dp, Color(0xFFB4574E).copy(alpha = 0.25f), RoundedCornerShape(10.dp)),
                                 contentAlignment = Alignment.Center
                             ) {
                                 PaletteIcon(
                                     tint = Color(0xFFB4574E),
-                                    modifier = Modifier.size(20.dp)
+                                    modifier = Modifier.size(18.dp)
                                 )
                             }
 
-                            Spacer(modifier = Modifier.width(12.dp))
+                            Spacer(modifier = Modifier.width(10.dp))
 
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(
                                     text = "Customize text",
-                                    fontSize = 14.sp,
+                                    fontSize = 13.sp,
                                     fontWeight = FontWeight.SemiBold,
                                     color = Color(0xFF2C2420)
                                 )
                                 Text(
                                     text = "Colors, size, font style",
-                                    fontSize = 12.sp,
+                                    fontSize = 11.sp,
                                     color = Color(0xFF8B7E72)
                                 )
                             }
@@ -1356,34 +1996,51 @@ fun ProfileScreen(
                                 imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
                                 contentDescription = "Customize text",
                                 tint = Color(0xFF8B7E72),
-                                modifier = Modifier.size(20.dp)
+                                modifier = Modifier.size(16.dp)
                             )
                         }
                     }
                 }
             }
 
-            Spacer(modifier = Modifier.height(20.dp))
+            Spacer(modifier = Modifier.height(10.dp))
 
-            // Footer "hope • love" in centered terracotta italic serif
+            // Footer "hope • love" in centered terracotta italic serif with gentle glow
             Text(
                 text = "hope • love",
                 style = TextStyle(
                     fontFamily = FontFamily.Serif,
                     fontStyle = FontStyle.Italic,
-                    fontSize = 15.sp,
+                    fontSize = 14.sp,
                     color = Color(0xFFB4574E),
-                    letterSpacing = 1.5.sp
+                    letterSpacing = 1.5.sp,
+                    shadow = Shadow(
+                        color = Color(0x1AB4574E),
+                        offset = Offset(0f, 1f),
+                        blurRadius = 3f
+                    )
                 ),
                 textAlign = TextAlign.Center
             )
         }
 
-        // Floating Bottom Navigation Pill (Fixed near bottom, active on Profile)
-        Box(
+        // Floating Bottom Navigation Pill (Slides down/hides on scroll down, reappears on scroll up)
+        AnimatedVisibility(
+            visible = isNavVisible,
             modifier = Modifier
                 .align(Alignment.BottomCenter)
-                .padding(bottom = bottomInset + 16.dp)
+                .padding(bottom = bottomInset + 16.dp),
+            enter = slideInVertically(
+                initialOffsetY = { fullHeight -> fullHeight * 2 },
+                animationSpec = spring(
+                    dampingRatio = Spring.DampingRatioLowBouncy,
+                    stiffness = Spring.StiffnessMediumLow
+                )
+            ) + fadeIn(animationSpec = tween(durationMillis = 200)),
+            exit = slideOutVertically(
+                targetOffsetY = { fullHeight -> fullHeight * 2 },
+                animationSpec = tween(durationMillis = 180, easing = FastOutSlowInEasing)
+            ) + fadeOut(animationSpec = tween(durationMillis = 150))
         ) {
             com.example.ui.BottomNavPill(
                 activeTab = "profile",
@@ -1491,6 +2148,249 @@ fun ProfileScreen(
                             baseWallpaperBitmap = finalBmp
                             showTextOptionsSheet = false
                         }
+                    }
+                }
+            )
+        }
+
+        // ─── BOTTOM SHEET 3: KEY SETUP SHEET ───
+        if (showKeySheet) {
+            ModalBottomSheet(
+                onDismissRequest = { showKeySheet = false },
+                containerColor = Color(0xFFFDFCF8)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 24.dp, vertical = 16.dp)
+                ) {
+                    KeySetupContent(
+                        isModalOrSheet = true,
+                        onSuccess = {
+                            showKeySheet = false
+                            hasApiKey = com.example.api.ApiKeyProvider.hasWorkingKey(context)
+                            android.widget.Toast.makeText(context, "API Key connected!", android.widget.Toast.LENGTH_SHORT).show()
+                        },
+                        onSkip = {
+                            showKeySheet = false
+                            hasApiKey = com.example.api.ApiKeyProvider.hasWorkingKey(context)
+                        }
+                    )
+                }
+            }
+        }
+
+        // ─── DEVELOPER BACKDOOR PASSCODE DIALOG ───
+        if (showDevPasscodeDialog) {
+            AlertDialog(
+                onDismissRequest = {
+                    showDevPasscodeDialog = false
+                    devPasscodeInput = ""
+                    devPasscodeError = null
+                },
+                containerColor = Color(0xFFFDFCF8),
+                shape = RoundedCornerShape(20.dp),
+                title = {
+                    Text(
+                        text = "Developer Unlock",
+                        fontFamily = FontFamily.Serif,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 19.sp,
+                        color = Color(0xFF2C2420)
+                    )
+                },
+                text = {
+                    Column(modifier = Modifier.fillMaxWidth()) {
+                        Text(
+                            text = "Enter passcode to access developer tools.",
+                            fontSize = 13.sp,
+                            color = Color(0xFF8B7E72),
+                            lineHeight = 18.sp
+                        )
+                        Spacer(modifier = Modifier.height(14.dp))
+                        androidx.compose.material3.OutlinedTextField(
+                            value = devPasscodeInput,
+                            onValueChange = {
+                                devPasscodeInput = it
+                                devPasscodeError = null
+                            },
+                            singleLine = true,
+                            visualTransformation = PasswordVisualTransformation(),
+                            keyboardOptions = KeyboardOptions(
+                                keyboardType = KeyboardType.NumberPassword,
+                                imeAction = ImeAction.Done
+                            ),
+                            keyboardActions = KeyboardActions(
+                                onDone = {
+                                    if (devPasscodeInput.trim() == "1982") {
+                                        showDevPasscodeDialog = false
+                                        devPasscodeInput = ""
+                                        devPasscodeError = null
+                                        showDevToolsDialog = true
+                                    } else {
+                                        devPasscodeError = "Wrong code"
+                                    }
+                                }
+                            ),
+                            shape = RoundedCornerShape(12.dp),
+                            colors = androidx.compose.material3.OutlinedTextFieldDefaults.colors(
+                                focusedTextColor = Color(0xFF2C2420),
+                                unfocusedTextColor = Color(0xFF2C2420),
+                                cursorColor = Color(0xFFB4574E),
+                                focusedBorderColor = Color(0xFFB4574E),
+                                unfocusedBorderColor = Color(0xFFE8E0D4),
+                                focusedContainerColor = Color(0xFFF2EFE6),
+                                unfocusedContainerColor = Color(0xFFF2EFE6)
+                            ),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("dev_passcode_input")
+                        )
+                        if (devPasscodeError != null) {
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Text(
+                                text = devPasscodeError ?: "",
+                                color = Color(0xFFB4574E),
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Medium
+                            )
+                        }
+                    }
+                },
+                confirmButton = {
+                    Button(
+                        onClick = {
+                            if (devPasscodeInput.trim() == "1982") {
+                                showDevPasscodeDialog = false
+                                devPasscodeInput = ""
+                                devPasscodeError = null
+                                showDevToolsDialog = true
+                            } else {
+                                devPasscodeError = "Wrong code"
+                            }
+                        },
+                        shape = RoundedCornerShape(12.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = Color(0xFFB4574E),
+                            contentColor = Color(0xFFFDFCF8)
+                        ),
+                        modifier = Modifier.testTag("dev_unlock_confirm_button")
+                    ) {
+                        Text("Unlock", fontWeight = FontWeight.SemiBold)
+                    }
+                },
+                dismissButton = {
+                    androidx.compose.material3.TextButton(
+                        onClick = {
+                            showDevPasscodeDialog = false
+                            devPasscodeInput = ""
+                            devPasscodeError = null
+                        }
+                    ) {
+                        Text("Cancel", color = Color(0xFF8B7E72), fontWeight = FontWeight.Medium)
+                    }
+                }
+            )
+        }
+
+        // ─── DEVELOPER TOOLS DIALOG ───
+        if (showDevToolsDialog) {
+            AlertDialog(
+                onDismissRequest = { showDevToolsDialog = false },
+                containerColor = Color(0xFFFDFCF8),
+                shape = RoundedCornerShape(20.dp),
+                title = {
+                    Text(
+                        text = "Developer Tools",
+                        fontFamily = FontFamily.Serif,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 19.sp,
+                        color = Color(0xFF2C2420)
+                    )
+                },
+                text = {
+                    Column(
+                        verticalArrangement = Arrangement.spacedBy(14.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        // 1. Toggle: "Use built-in developer key"
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(Color(0xFFF7F4EC))
+                                .padding(horizontal = 14.dp, vertical = 12.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "Use built-in developer key",
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = Color(0xFF2C2420)
+                                )
+                                Spacer(modifier = Modifier.height(2.dp))
+                                Text(
+                                    text = if (isDeveloperModeActive) "Connected (Developer Key)" else "Use pre-configured backdoor key",
+                                    fontSize = 11.sp,
+                                    color = if (isDeveloperModeActive) Color(0xFFB4574E) else Color(0xFF8B7E72)
+                                )
+                            }
+                            Spacer(modifier = Modifier.width(8.dp))
+                            androidx.compose.material3.Switch(
+                                checked = isDeveloperModeActive,
+                                onCheckedChange = { enabled ->
+                                    isDeveloperModeActive = enabled
+                                    com.example.api.ApiKeyProvider.setDeveloperMode(context, enabled)
+                                    hasApiKey = com.example.api.ApiKeyProvider.hasWorkingKey(context)
+                                    android.widget.Toast.makeText(
+                                        context,
+                                        if (enabled) "Developer key enabled" else "Developer key disabled",
+                                        android.widget.Toast.LENGTH_SHORT
+                                    ).show()
+                                },
+                                colors = androidx.compose.material3.SwitchDefaults.colors(
+                                    checkedThumbColor = Color(0xFFFDFCF8),
+                                    checkedTrackColor = Color(0xFFB4574E),
+                                    checkedBorderColor = Color(0xFFB4574E),
+                                    uncheckedThumbColor = Color(0xFF8B7E72),
+                                    uncheckedTrackColor = Color(0xFFE8E0D4),
+                                    uncheckedBorderColor = Color(0xFFE8E0D4)
+                                ),
+                                modifier = Modifier.testTag("dev_key_toggle")
+                            )
+                        }
+
+                        // 2. Button: "Open diagnostics"
+                        Button(
+                            onClick = {
+                                showDevToolsDialog = false
+                                onOpenDiagnostic()
+                            },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(46.dp)
+                                .testTag("btn_open_diagnostics"),
+                            shape = RoundedCornerShape(12.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = Color(0xFFB4574E),
+                                contentColor = Color(0xFFFDFCF8)
+                            )
+                        ) {
+                            Text(
+                                text = "Open Diagnostics",
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+                    }
+                },
+                confirmButton = {
+                    androidx.compose.material3.TextButton(
+                        onClick = { showDevToolsDialog = false }
+                    ) {
+                        Text("Close", color = Color(0xFF8B7E72), fontWeight = FontWeight.SemiBold)
                     }
                 }
             )
@@ -1985,7 +2885,7 @@ private fun EditProfileDialog(
 }
 
 /**
- * Snooze options configurator dialog
+ * Snooze options configurator dialog with elevated brand aesthetic
  */
 @Composable
 private fun SnoozeOptionsDialog(
@@ -1996,74 +2896,162 @@ private fun SnoozeOptionsDialog(
     val currentOptions = remember { WakePrefsManager.getSnoozeOptions(context) }
     val availableMinutes = listOf(5, 10, 15, 20, 30, 45, 60, 90)
 
-    var slot1 by remember { mutableStateOf(currentOptions.getOrNull(0) ?: 15) }
-    var slot2 by remember { mutableStateOf(currentOptions.getOrNull(1) ?: 30) }
-    var slot3 by remember { mutableStateOf(currentOptions.getOrNull(2) ?: 60) }
+    var slot1 by remember { mutableIntStateOf(currentOptions.getOrNull(0) ?: 15) }
+    var slot2 by remember { mutableIntStateOf(currentOptions.getOrNull(1) ?: 30) }
+    var slot3 by remember { mutableIntStateOf(currentOptions.getOrNull(2) ?: 60) }
 
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        containerColor = Color(0xFFFDFCF8),
-        title = {
-            Text(
-                text = "Snooze Durations",
-                fontFamily = FontFamily.Serif,
-                fontWeight = FontWeight.Bold,
-                color = Color(0xFF2C2420),
-                fontSize = 18.sp
-            )
-        },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+    Dialog(onDismissRequest = onDismiss) {
+        Card(
+            shape = RoundedCornerShape(24.dp),
+            colors = CardDefaults.cardColors(containerColor = Color(0xFFFDFCF8)),
+            elevation = CardDefaults.cardElevation(defaultElevation = 6.dp),
+            border = BorderStroke(1.dp, Color(0xFFE8E0D4)),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 4.dp)
+                .testTag("dialog_snooze_durations")
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(24.dp)
+            ) {
+                // Header with Moon Icon and Serif Title
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(38.dp)
+                            .clip(CircleShape)
+                            .background(Color(0xFFB4574E).copy(alpha = 0.12f)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        MoonIcon(
+                            tint = Color(0xFFB4574E),
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+
+                    Text(
+                        text = "Snooze Durations",
+                        style = TextStyle(
+                            fontFamily = FontFamily.Serif,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 20.sp,
+                            color = Color(0xFF2C2420)
+                        )
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+
                 Text(
                     text = "Select three snooze duration options for your reminders:",
-                    color = Color(0xFF8B7E72),
-                    fontSize = 14.sp
+                    style = TextStyle(
+                        fontSize = 14.sp,
+                        color = Color(0xFF8B7E72),
+                        lineHeight = 20.sp
+                    )
                 )
 
-                DurationDropdownSelector(
-                    label = "Option 1 (Default 1-Click)",
-                    selectedMinutes = slot1,
-                    options = availableMinutes,
-                    onSelected = { slot1 = it }
-                )
+                Spacer(modifier = Modifier.height(20.dp))
 
-                DurationDropdownSelector(
-                    label = "Option 2",
-                    selectedMinutes = slot2,
-                    options = availableMinutes,
-                    onSelected = { slot2 = it }
-                )
+                // Card containing the 3 option rows
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(16.dp))
+                        .background(Color(0xFFF2EFE6).copy(alpha = 0.5f))
+                        .border(1.dp, Color(0xFFE8E0D4), RoundedCornerShape(16.dp))
+                        .padding(horizontal = 16.dp, vertical = 6.dp),
+                    verticalArrangement = Arrangement.spacedBy(2.dp)
+                ) {
+                    DurationDropdownSelector(
+                        label = "Option 1 (Default)",
+                        selectedMinutes = slot1,
+                        options = availableMinutes,
+                        onSelected = { slot1 = it }
+                    )
 
-                DurationDropdownSelector(
-                    label = "Option 3",
-                    selectedMinutes = slot3,
-                    options = availableMinutes,
-                    onSelected = { slot3 = it }
-                )
-            }
-        },
-        confirmButton = {
-            Button(
-                onClick = {
-                    WakePrefsManager.setSnoozeOptions(context, listOf(slot1, slot2, slot3))
-                    WakePrefsManager.setDefaultSnoozeMinutes(context, slot1)
-                    onSaved()
-                },
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = Color(0xFFB4574E),
-                    contentColor = Color.White
-                ),
-                shape = RoundedCornerShape(12.dp)
-            ) {
-                Text("Save", fontWeight = FontWeight.SemiBold)
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) {
-                Text("Cancel", color = Color(0xFF8B7E72))
+                    HorizontalDivider(color = Color(0xFFE8E0D4), thickness = 1.dp)
+
+                    DurationDropdownSelector(
+                        label = "Option 2",
+                        selectedMinutes = slot2,
+                        options = availableMinutes,
+                        onSelected = { slot2 = it }
+                    )
+
+                    HorizontalDivider(color = Color(0xFFE8E0D4), thickness = 1.dp)
+
+                    DurationDropdownSelector(
+                        label = "Option 3",
+                        selectedMinutes = slot3,
+                        options = availableMinutes,
+                        onSelected = { slot3 = it }
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(24.dp))
+
+                // Actions: Cancel & Save
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    TextButton(
+                        onClick = onDismiss,
+                        modifier = Modifier
+                            .height(44.dp)
+                            .padding(horizontal = 8.dp)
+                            .testTag("btn_cancel_snooze")
+                    ) {
+                        Text(
+                            text = "Cancel",
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = Color(0xFF8B7E72)
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.width(8.dp))
+
+                    Button(
+                        onClick = {
+                            WakePrefsManager.setSnoozeOptions(context, listOf(slot1, slot2, slot3))
+                            WakePrefsManager.setDefaultSnoozeMinutes(context, slot1)
+                            onSaved()
+                        },
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = Color(0xFFB4574E),
+                            contentColor = Color(0xFFFDFCF8)
+                        ),
+                        shape = RoundedCornerShape(14.dp),
+                        elevation = ButtonDefaults.buttonElevation(defaultElevation = 2.dp),
+                        modifier = Modifier
+                            .height(44.dp)
+                            .testTag("btn_save_snooze")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Check,
+                            contentDescription = null,
+                            tint = Color(0xFFFDFCF8),
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = "Save",
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
+                }
             }
         }
-    )
+    }
 }
 
 @Composable
@@ -2076,7 +3064,9 @@ private fun DurationDropdownSelector(
     var expanded by remember { mutableStateOf(false) }
 
     Row(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween
     ) {
@@ -2084,15 +3074,18 @@ private fun DurationDropdownSelector(
             text = label,
             fontWeight = FontWeight.Medium,
             color = Color(0xFF2C2420),
-            fontSize = 14.sp
+            fontSize = 14.sp,
+            modifier = Modifier.weight(1f)
         )
+
+        Spacer(modifier = Modifier.width(12.dp))
 
         Box {
             Row(
                 modifier = Modifier
-                    .clip(RoundedCornerShape(8.dp))
-                    .background(Color(0xFFF2EFE6))
-                    .border(1.dp, Color(0xFFE8E0D4), RoundedCornerShape(8.dp))
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(Color(0xFFFDFCF8))
+                    .border(1.dp, Color(0xFFE8E0D4), RoundedCornerShape(10.dp))
                     .clickable { expanded = true }
                     .padding(horizontal = 14.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
@@ -2102,11 +3095,13 @@ private fun DurationDropdownSelector(
                     text = WakePrefsManager.formatDuration(selectedMinutes),
                     fontWeight = FontWeight.SemiBold,
                     color = Color(0xFFB4574E),
-                    fontSize = 14.sp
+                    fontSize = 14.sp,
+                    maxLines = 1,
+                    softWrap = false
                 )
                 Icon(
                     imageVector = Icons.Default.KeyboardArrowDown,
-                    contentDescription = "Select",
+                    contentDescription = "Select duration",
                     tint = Color(0xFF8B7E72),
                     modifier = Modifier.size(16.dp)
                 )
@@ -2115,7 +3110,9 @@ private fun DurationDropdownSelector(
             DropdownMenu(
                 expanded = expanded,
                 onDismissRequest = { expanded = false },
-                modifier = Modifier.background(Color(0xFFFDFCF8))
+                modifier = Modifier
+                    .background(Color(0xFFFDFCF8))
+                    .border(1.dp, Color(0xFFE8E0D4), RoundedCornerShape(12.dp))
             ) {
                 options.forEach { minutes ->
                     val isSelected = minutes == selectedMinutes
@@ -2129,9 +3126,11 @@ private fun DurationDropdownSelector(
                                 Text(
                                     text = WakePrefsManager.formatDuration(minutes),
                                     fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
-                                    color = if (isSelected) Color(0xFFB4574E) else Color(0xFF2C2420)
+                                    color = if (isSelected) Color(0xFFB4574E) else Color(0xFF2C2420),
+                                    fontSize = 14.sp
                                 )
                                 if (isSelected) {
+                                    Spacer(modifier = Modifier.width(12.dp))
                                     Icon(
                                         imageVector = Icons.Default.Check,
                                         contentDescription = "Selected",

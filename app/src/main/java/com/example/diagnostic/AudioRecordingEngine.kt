@@ -44,7 +44,8 @@ class AudioRecordingEngine(
     private val context: Context,
     private val logger: (LogLevel, String, String?) -> Unit,
     private val onBargeInDetected: () -> Unit,
-    private val onUserSpeechDetected: (() -> Unit)? = null
+    private val onUserSpeechDetected: (() -> Unit)? = null,
+    private val onRecordingError: ((String) -> Unit)? = null
 ) {
     // Single-threaded background dispatcher dedicated solely to AudioRecord reading
     private val recordingDispatcher = Dispatchers.IO.limitedParallelism(1)
@@ -169,11 +170,13 @@ class AudioRecordingEngine(
         }
 
         if (!hasRecordAudioPermission()) {
+            val permMsg = "Microphone permission not granted"
             log(
                 LogLevel.ERROR,
-                "[MIC RECORD] RECORD_AUDIO permission not granted",
+                "[MIC RECORD] $permMsg",
                 "Request android.permission.RECORD_AUDIO runtime permission before starting full duplex microphone recording."
             )
+            onRecordingError?.invoke("Microphone permission unavailable. Tap to retry.")
             return false
         }
 
@@ -183,6 +186,7 @@ class AudioRecordingEngine(
                 LogLevel.ERROR,
                 "[MIC RECORD] AudioRecord.getMinBufferSize failed with error code: $minBufferSize"
             )
+            onRecordingError?.invoke("Microphone unavailable. Tap to retry.")
             return false
         }
 
@@ -210,9 +214,11 @@ class AudioRecordingEngine(
             }
         } catch (e: SecurityException) {
             log(LogLevel.ERROR, "[MIC RECORD] SecurityException initializing AudioRecord: ${e.localizedMessage}")
+            onRecordingError?.invoke("Microphone unavailable. Tap to retry.")
             return false
         } catch (e: Exception) {
             log(LogLevel.ERROR, "[MIC RECORD] Exception initializing AudioRecord: ${e.localizedMessage}")
+            onRecordingError?.invoke("Microphone unavailable. Tap to retry.")
             return false
         }
 
@@ -222,6 +228,7 @@ class AudioRecordingEngine(
                 "[MIC RECORD] AudioRecord initialization failed (State: ${audioRecord.state})"
             )
             audioRecord.release()
+            onRecordingError?.invoke("Microphone unavailable. Tap to retry.")
             return false
         }
 
@@ -230,6 +237,7 @@ class AudioRecordingEngine(
         } catch (e: Exception) {
             log(LogLevel.ERROR, "[MIC RECORD] Failed to start AudioRecord capture: ${e.localizedMessage}")
             audioRecord.release()
+            onRecordingError?.invoke("Microphone unavailable. Tap to retry.")
             return false
         }
 
@@ -239,6 +247,7 @@ class AudioRecordingEngine(
                 "[MIC RECORD] AudioRecord not in RECORDING state (State: ${audioRecord.recordingState})"
             )
             audioRecord.release()
+            onRecordingError?.invoke("Microphone unavailable. Tap to retry.")
             return false
         }
 
@@ -433,6 +442,7 @@ class AudioRecordingEngine(
                         if (consecutiveReadErrors >= 3) {
                             log(LogLevel.WARN, "[MIC RECORD] WARNING: Hardware read failing. OS may have revoked access due to another app.")
                             consecutiveReadErrors = 0
+                            onRecordingError?.invoke("Microphone unavailable. Tap to retry.")
                             throw IllegalStateException("AudioRecord hardware read failing ($bytesRead)")
                         }
                         delay(50)

@@ -23,6 +23,14 @@ import androidx.compose.runtime.setValue
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.unit.dp
 import com.example.customization.CustomizationScreen
 import com.example.customization.VerseEditorScreen
 import com.example.customization.VersePrefsManager
@@ -104,6 +112,7 @@ class MainActivity : ComponentActivity() {
         WakePrefsManager.logWakeEvent(msg)
     }
 
+    @OptIn(ExperimentalMaterial3Api::class)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
@@ -127,6 +136,7 @@ class MainActivity : ComponentActivity() {
         com.example.wake.OvernightJournal.logPermissionsAudit(this, "MainActivity.onCreate")
         WakeDetectorService.startService(this)
         com.example.wake.PrayerAlarmScheduler.scheduleNextPrayer(this)
+        com.example.ui.key.GuideImageLoader.preload(this)
 
         if (VersePrefsManager.isVerseEnabled(this)) {
             lifecycleScope.launch(Dispatchers.IO) {
@@ -151,11 +161,43 @@ class MainActivity : ComponentActivity() {
                     androidx.compose.runtime.mutableStateOf("profile")
                 }
 
-                if (!isOnboardingComplete) {
+                var showReauthKeySheet by androidx.compose.runtime.remember {
+                    androidx.compose.runtime.mutableStateOf(false)
+                }
+
+                androidx.compose.runtime.LaunchedEffect(Unit) {
+                    com.example.api.ApiKeyProvider.authErrorEvent.collect {
+                        showReauthKeySheet = true
+                    }
+                }
+
+                androidx.compose.runtime.LaunchedEffect(isOnboardingComplete, openTextOptionsForFirstSave, currentScreen) {
+                    if (isOnboardingComplete && 
+                        !openTextOptionsForFirstSave && 
+                        currentScreen != "verse_editor" && 
+                        !com.example.api.ApiKeyProvider.hasWorkingKey(context)) {
+                        showReauthKeySheet = true
+                    }
+                }
+
+                androidx.compose.runtime.LaunchedEffect(Unit) {
+                    val currentKey = com.example.api.ApiKeyProvider.getUserApiKey(context)
+                    if (currentKey.isNotBlank()) {
+                        val result = com.example.api.ApiKeyProvider.validateKeyLive(currentKey)
+                        if (result.isFailure) {
+                            com.example.api.ApiKeyProvider.notifyAuthError()
+                        }
+                    }
+                }
+
+                if (!isOnboardingComplete && currentScreen != "verse_editor") {
                     com.example.ui.OnboardingScreen(
                         onOnboardingComplete = {
                             WakePrefsManager.setOnboardingComplete(context, true)
                             isOnboardingComplete = true
+                            if (com.example.api.ApiKeyProvider.hasWorkingKey(context)) {
+                                android.widget.Toast.makeText(context, "You're ready!", android.widget.Toast.LENGTH_SHORT).show()
+                            }
                         },
                         onOpenVerseEditor = {
                             previousScreenBeforeEditor = "home"
@@ -165,7 +207,6 @@ class MainActivity : ComponentActivity() {
                 } else {
                     when (currentScreen) {
                         "home" -> com.example.ui.HomeScreen(
-                            onOpenSettings = { currentScreen = "settings" },
                             onOpenProfile = { currentScreen = "profile" },
                             onOpenFavorites = { currentScreen = "favorites" }
                         )
@@ -181,16 +222,14 @@ class MainActivity : ComponentActivity() {
                                 currentScreen = "verse_editor"
                             },
                             openTextOptionsOnLaunch = openTextOptionsForFirstSave,
-                            onResetTextOptionsFlag = { openTextOptionsForFirstSave = false },
-                            onOpenFavorites = { currentScreen = "favorites" }
-                        )
-                        "settings" -> com.example.ui.SettingsScreen(
-                            onBack = { currentScreen = "home" },
-                            onOpenCustomization = { currentScreen = "customization" },
+                            onResetTextOptionsFlag = { 
+                                openTextOptionsForFirstSave = false
+                            },
+                            onOpenFavorites = { currentScreen = "favorites" },
                             onOpenDiagnostic = { currentScreen = "diagnostic" }
                         )
                         "customization" -> CustomizationScreen(
-                            onBack = { currentScreen = "settings" },
+                            onBack = { currentScreen = "profile" },
                             onOpenVerseEditor = {
                                 previousScreenBeforeEditor = "customization"
                                 currentScreen = "verse_editor"
@@ -198,6 +237,10 @@ class MainActivity : ComponentActivity() {
                         )
                         "verse_editor" -> VerseEditorScreen(
                             onBack = { isFirstSave ->
+                                if (!isOnboardingComplete) {
+                                    WakePrefsManager.setOnboardingComplete(context, true)
+                                    isOnboardingComplete = true
+                                }
                                 if (isFirstSave) {
                                     openTextOptionsForFirstSave = true
                                     currentScreen = "profile"
@@ -208,8 +251,32 @@ class MainActivity : ComponentActivity() {
                         )
                         "diagnostic" -> DiagnosticScreen(
                             viewModel = diagnosticViewModel,
-                            onBack = { currentScreen = "settings" }
+                            onBack = { currentScreen = "profile" }
                         )
+                    }
+                }
+
+                if (showReauthKeySheet && !openTextOptionsForFirstSave && currentScreen != "verse_editor") {
+                    ModalBottomSheet(
+                        onDismissRequest = { showReauthKeySheet = false },
+                        containerColor = Color(0xFFFDFCF8)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 24.dp, vertical = 16.dp)
+                        ) {
+                            com.example.ui.key.KeySetupContent(
+                                isModalOrSheet = true,
+                                onSuccess = {
+                                    showReauthKeySheet = false
+                                    android.widget.Toast.makeText(context, "You're ready!", android.widget.Toast.LENGTH_SHORT).show()
+                                },
+                                onSkip = {
+                                    showReauthKeySheet = false
+                                }
+                            )
+                        }
                     }
                 }
             }

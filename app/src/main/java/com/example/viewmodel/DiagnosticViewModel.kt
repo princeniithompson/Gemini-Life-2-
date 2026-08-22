@@ -219,23 +219,34 @@ class DiagnosticViewModel : ViewModel() {
     }
 
     private fun getInitialApiKey(): String {
-        return try {
-            val key = BuildConfig.GEMINI_API_KEY
-            if (key.isNotBlank() && key != "MY_GEMINI_API_KEY") {
-                key
-            } else {
-                ""
-            }
-        } catch (e: Exception) {
-            ""
+        return ""
+    }
+
+    fun syncApiKey(context: Context) {
+        val currentKey = com.example.api.ApiKeyProvider.getApiKey(context)
+        if (apiKeyInput.value.isBlank() && currentKey.isNotBlank()) {
+            apiKeyInput.value = currentKey
         }
+    }
+
+    fun saveUserApiKey(context: Context, key: String) {
+        apiKeyInput.value = key.trim()
+        com.example.api.ApiKeyProvider.setUserApiKey(context, key)
+    }
+
+    fun setDeveloperMode(context: Context, enabled: Boolean) {
+        com.example.api.ApiKeyProvider.setDeveloperMode(context, enabled)
+        apiKeyInput.value = com.example.api.ApiKeyProvider.getApiKey(context)
     }
 
     val isMicMuted = MutableStateFlow(false)
 
     fun connect(context: Context) {
+        val resolvedKey = apiKeyInput.value.ifBlank {
+            com.example.api.ApiKeyProvider.getApiKey(context)
+        }
         engine.startDiagnostic(
-            apiKey = apiKeyInput.value,
+            apiKey = resolvedKey,
             modelName = modelNameInput.value,
             debugMode = debugMode.value,
             context = context.applicationContext
@@ -266,7 +277,7 @@ class DiagnosticViewModel : ViewModel() {
     }
 
     fun getFullLogText(): String {
-        val header = "Gemini Live Diagnostic Log - Generated at ${SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())}\n\n"
+        val header = "First Light Diagnostic Log - Generated at ${SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())}\n\n"
         val body = _logEntries.value.joinToString(separator = "\n") { it.toFormattedLine() }
         return header + body
     }
