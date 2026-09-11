@@ -38,6 +38,8 @@ object WakePrefsManager {
     const val KEY_PENDING_WAKE_TIMESTAMP = "pending_wake_timestamp"
     const val KEY_RITUAL_PENDING = "ritual_pending"
     const val KEY_ONBOARDING_COMPLETE = "onboarding_complete"
+    const val KEY_ONBOARDING_STEP = "onboarding_current_step"
+    const val KEY_KEY_SETUP_STEP = "key_setup_current_step"
     const val KEY_USER_NAME = "user_name"
     const val KEY_USER_DOB = "user_dob"
     const val KEY_PRAYER_HISTORY = "prayer_history"
@@ -46,6 +48,7 @@ object WakePrefsManager {
     const val KEY_PREVIEW_PRAY_NOW = "preview_pray_now"
     const val KEY_DEV_NOTIFICATION_TEST_ENABLED = "dev_notification_test_enabled"
     const val KEY_PRAYER_TIME = "prayer_time"
+    const val KEY_PRAYER_DAYS = "prayer_scheduled_days"
     const val KEY_REMINDER_ENABLED = "reminder_enabled"
     const val KEY_SNOOZE_OPTIONS = "snooze_options"
     const val KEY_DEFAULT_SNOOZE_MINUTES = "default_snooze_minutes"
@@ -54,6 +57,9 @@ object WakePrefsManager {
     const val KEY_FIRST_RUN_PERMISSIONS_PROMPTED = "first_run_permissions_prompted"
     const val KEY_DOUBLE_TAP_END = "double_tap_end"
     const val KEY_INTERRUPTED_BY_CALL = "interrupted_by_call"
+    const val KEY_PRAYER_DEFERRED_OFFLINE = "prayer_deferred_offline"
+    const val KEY_OFFLINE_NOTIFIED_CYCLE_ID = "offline_notified_cycle_id"
+    const val KEY_DEFERRED_DAY = "deferred_day"
 
     fun getPrayerTime(context: Context): String {
         return getPrefs(context).getString(KEY_PRAYER_TIME, "06:00 AM") ?: "06:00 AM"
@@ -107,6 +113,36 @@ object WakePrefsManager {
 
     fun isReminderEnabled(context: Context): Boolean {
         return getPrefs(context).getBoolean(KEY_REMINDER_ENABLED, true)
+    }
+
+    /**
+     * Set of active prayer days represented by java.util.Calendar day-of-week integers:
+     * Calendar.SUNDAY (1), MONDAY (2), TUESDAY (3), WEDNESDAY (4), THURSDAY (5), FRIDAY (6), SATURDAY (7).
+     * By default, all 7 days are enabled: "1,2,3,4,5,6,7".
+     */
+    fun getPrayerScheduledDays(context: Context): Set<Int> {
+        val raw = getPrefs(context).getString(KEY_PRAYER_DAYS, "1,2,3,4,5,6,7") ?: "1,2,3,4,5,6,7"
+        return try {
+            raw.split(",")
+                .mapNotNull { it.trim().toIntOrNull() }
+                .filter { it in 1..7 }
+                .toSet()
+                .ifEmpty { setOf(1, 2, 3, 4, 5, 6, 7) }
+        } catch (_: Exception) {
+            setOf(1, 2, 3, 4, 5, 6, 7)
+        }
+    }
+
+    fun setPrayerScheduledDays(context: Context, days: Set<Int>) {
+        val safeDays = if (days.isEmpty()) setOf(1, 2, 3, 4, 5, 6, 7) else days
+        val raw = safeDays.joinToString(",")
+        getPrefs(context).edit().putString(KEY_PRAYER_DAYS, raw).apply()
+        logWakeEvent("[SCHEDULER] Scheduled prayer days updated to $raw")
+        PrayerAlarmScheduler.scheduleNextPrayer(context)
+    }
+
+    fun isDayScheduled(context: Context, calendarDayOfWeek: Int): Boolean {
+        return getPrayerScheduledDays(context).contains(calendarDayOfWeek)
     }
 
     fun setReminderEnabled(context: Context, enabled: Boolean) {
@@ -209,6 +245,26 @@ object WakePrefsManager {
 
     fun setOnboardingComplete(context: Context, complete: Boolean) {
         getPrefs(context).edit().putBoolean(KEY_ONBOARDING_COMPLETE, complete).apply()
+        if (complete) {
+            setOnboardingStep(context, 1)
+            setKeySetupStep(context, "CHOICES")
+        }
+    }
+
+    fun getOnboardingStep(context: Context): Int {
+        return getPrefs(context).getInt(KEY_ONBOARDING_STEP, 1)
+    }
+
+    fun setOnboardingStep(context: Context, step: Int) {
+        getPrefs(context).edit().putInt(KEY_ONBOARDING_STEP, step).apply()
+    }
+
+    fun getKeySetupStep(context: Context): String {
+        return getPrefs(context).getString(KEY_KEY_SETUP_STEP, "CHOICES") ?: "CHOICES"
+    }
+
+    fun setKeySetupStep(context: Context, step: String) {
+        getPrefs(context).edit().putString(KEY_KEY_SETUP_STEP, step).apply()
     }
 
     fun hasPromptedFirstRunPermissions(context: Context): Boolean {
@@ -443,6 +499,53 @@ object WakePrefsManager {
     fun setInterruptedByCall(context: Context, interrupted: Boolean) {
         getPrefs(context).edit().putBoolean(KEY_INTERRUPTED_BY_CALL, interrupted).apply()
         val msg = "[CALL] interrupted_by_call set to $interrupted"
+        Log.i("WakeDetector", msg)
+        logWakeEvent(msg)
+    }
+
+    fun isPrayerDeferredOffline(context: Context): Boolean {
+        return getPrefs(context).getBoolean(KEY_PRAYER_DEFERRED_OFFLINE, false)
+    }
+
+    fun setPrayerDeferredOffline(context: Context, deferred: Boolean) {
+        getPrefs(context).edit().putBoolean(KEY_PRAYER_DEFERRED_OFFLINE, deferred).apply()
+        val msg = "[CONNECTIVITY] prayer_deferred_offline set to $deferred"
+        Log.i("WakeDetector", msg)
+        logWakeEvent(msg)
+    }
+
+    fun getOfflineNotifiedCycleId(context: Context): Long {
+        return getPrefs(context).getLong(KEY_OFFLINE_NOTIFIED_CYCLE_ID, 0L)
+    }
+
+    fun setOfflineNotifiedCycleId(context: Context, cycleId: Long) {
+        getPrefs(context).edit().putLong(KEY_OFFLINE_NOTIFIED_CYCLE_ID, cycleId).apply()
+        val msg = "[CONNECTIVITY] offline_notified_cycle_id set to $cycleId"
+        Log.i("WakeDetector", msg)
+        logWakeEvent(msg)
+    }
+
+    fun getDeferredDay(context: Context): String {
+        return getPrefs(context).getString(KEY_DEFERRED_DAY, "") ?: ""
+    }
+
+    fun setDeferredDay(context: Context, day: String) {
+        getPrefs(context).edit().putString(KEY_DEFERRED_DAY, day).apply()
+        val msg = "[CONNECTIVITY] deferred_day set to $day"
+        Log.i("WakeDetector", msg)
+        logWakeEvent(msg)
+    }
+
+    fun getTodayString(): String {
+        return SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date())
+    }
+
+    fun clearDeferredPrayer(context: Context) {
+        getPrefs(context).edit()
+            .putBoolean(KEY_PRAYER_DEFERRED_OFFLINE, false)
+            .remove(KEY_DEFERRED_DAY)
+            .apply()
+        val msg = "[CONNECTIVITY] Cleared deferred prayer state"
         Log.i("WakeDetector", msg)
         logWakeEvent(msg)
     }

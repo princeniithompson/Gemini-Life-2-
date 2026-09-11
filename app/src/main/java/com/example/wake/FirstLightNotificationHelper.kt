@@ -74,10 +74,8 @@ object FirstLightNotificationHelper {
      */
     fun postState1Reminder(context: Context): Boolean {
         ensureChannel(context)
-        val userName = WakePrefsManager.getUserName(context).trim()
-        val displayName = if (userName.isNotEmpty()) userName else "friend"
         val titleText = "First Light — Morning Prayer"
-        val bodyText = "Good morning, $displayName. Morning prayer begins in 30 seconds."
+        val bodyText = "Prayer starts in 30 seconds"
 
         val defaultSnoozeMin = WakePrefsManager.getDefaultSnoozeMinutes(context)
         val defaultSnoozeLabel = WakePrefsManager.formatDuration(defaultSnoozeMin)
@@ -278,6 +276,54 @@ object FirstLightNotificationHelper {
             val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             nm.cancel(NOTIFICATION_ID)
         } catch (_: Exception) {}
+    }
+
+    /**
+     * Wake-Level Offline Notification
+     * Same importance, sound, and DND-bypass as the morning alarm notification.
+     * Posted when scheduled prayer arrives but the device has no internet connection.
+     */
+    fun postOfflineNotification(context: Context): Boolean {
+        ensureChannel(context)
+        val titleText = "First Light — Morning Prayer"
+        val bodyText = "No internet. Prayer waits for you online."
+
+        val openAppIntent = Intent(context, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+        }
+        val openPendingIntent = PendingIntent.getActivity(
+            context,
+            204,
+            openAppIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val alarmSound = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
+            ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
+
+        val notification = NotificationCompat.Builder(context, WakeDetectorService.ALARM_CHANNEL_ID)
+            .setSmallIcon(R.drawable.ic_streak_flame)
+            .setColor(0xFFB4574E.toInt())
+            .setContentTitle(titleText)
+            .setContentText(bodyText)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(bodyText))
+            .setPriority(NotificationCompat.PRIORITY_MAX)
+            .setCategory(NotificationCompat.CATEGORY_ALARM)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .setSound(alarmSound, android.media.AudioManager.STREAM_ALARM)
+            .setContentIntent(openPendingIntent)
+            .setAutoCancel(true)
+            .build()
+
+        return try {
+            val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            nm.notify(NOTIFICATION_ID, notification)
+            Log.i("WakeDetector", "[NOTIF] Posted wake-level offline notification: '$bodyText' (ID=$NOTIFICATION_ID)")
+            true
+        } catch (e: Exception) {
+            Log.e("WakeDetector", "[NOTIF] Failed to post offline notification: ${e.message}", e)
+            false
+        }
     }
 
     /**

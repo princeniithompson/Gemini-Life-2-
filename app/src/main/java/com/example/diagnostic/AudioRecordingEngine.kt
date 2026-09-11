@@ -79,6 +79,7 @@ class AudioRecordingEngine(
     private val isRecording = AtomicBoolean(false)
     private val isMuted = AtomicBoolean(false)
     private val isInitializing = AtomicBoolean(false)
+    private val lastGateOpenState = AtomicBoolean(false)
     private val webSocketRef = AtomicReference<WebSocket?>(null)
     private val isModelPlayingSupplier = AtomicReference<(() -> Boolean)?>(null)
 
@@ -361,9 +362,29 @@ class AudioRecordingEngine(
                             prevSample = boostedSample
                         }
 
+                        val isCurrentlyMuted = isMuted.get() || isPlaying
+                        val isGateOpen = !isCurrentlyMuted && isRecording.get()
+                        
+                        if (lastGateOpenState.getAndSet(isGateOpen) != isGateOpen) {
+                            val triggerReason = if (isGateOpen) {
+                                "User turn active (Gemini turn complete & playback drained)"
+                            } else {
+                                if (isMuted.get()) "Mute enabled" else "Gemini speaking / turn active"
+                            }
+                            log(
+                                LogLevel.INFO,
+                                "[MIC RECORD] Gate ${if (isGateOpen) "OPEN (streaming PCM)" else "CLOSED (dropping PCM locally)"} - Trigger: $triggerReason"
+                            )
+                        }
+
                         val rms = if (sampleCount > 0) kotlin.math.sqrt(sumSquares / sampleCount) else 0.0
                         val sampleDiffRms = if (sampleCount > 1) kotlin.math.sqrt(sumDiffSquares / (sampleCount - 1)) else 0.0
-                        onRmsUpdated?.invoke(rms.toFloat())
+                        
+                        if (isGateOpen) {
+                            onRmsUpdated?.invoke(rms.toFloat())
+                        } else {
+                            onRmsUpdated?.invoke(0f)
+                        }
 
                         if (!isPlaying && rms < estimatedNoiseFloorRms * 2.0 && rms < 2500.0) {
                             estimatedNoiseFloorRms = estimatedNoiseFloorRms * 0.95 + rms * 0.05
@@ -387,17 +408,16 @@ class AudioRecordingEngine(
                         consecutiveBargeInFrames = 0
 
                         val now = System.currentTimeMillis()
-                        val isCurrentlyMuted = isMuted.get() || isPlaying
                         if (now - lastHeartbeatTimeMs >= 3000L) {
                             lastHeartbeatTimeMs = now
                             val chunksSent = chunksSentCount.get()
                             log(
                                 LogLevel.DEBUG,
-                                "[MIC STREAM] heartbeat - loop alive, muted=$isCurrentlyMuted, chunksSent=$chunksSent"
+                                "[MIC STREAM] heartbeat - loop alive, gateOpen=$isGateOpen, chunksSent=$chunksSent"
                             )
                         }
 
-                        val shouldStreamToWebSocket = !isCurrentlyMuted
+                        val shouldStreamToWebSocket = isGateOpen
                         val activeWs = webSocketRef.get()
                         if (shouldStreamToWebSocket && activeWs != null) {
                             val base64Pcm = Base64.encodeToString(chunkBuffer, 0, bytesRead, Base64.NO_WRAP)
@@ -438,12 +458,8 @@ class AudioRecordingEngine(
                     } else {
                         consecutiveReadErrors++
                         readErrorsCount.incrementAndGet()
-                        log(LogLevel.WARN, "[MIC RECORD] Read returned error/empty code $bytesRead (consecutive errors: $consecutiveReadErrors)")
-                        if (consecutiveReadErrors >= 3) {
-                            log(LogLevel.WARN, "[MIC RECORD] WARNING: Hardware read failing. OS may have revoked access due to another app.")
-                            consecutiveReadErrors = 0
-                            onRecordingError?.invoke("Microphone unavailable. Tap to retry.")
-                            throw IllegalStateException("AudioRecord hardware read failing ($bytesRead)")
+                        if (consecutiveReadErrors % 20 == 1) {
+                            log(LogLevel.INFO, "[MIC RECORD] Zero/empty read code $bytesRead (consecutive: $consecutiveReadErrors) - backing off non-fatally in background")
                         }
                         delay(50)
                     }

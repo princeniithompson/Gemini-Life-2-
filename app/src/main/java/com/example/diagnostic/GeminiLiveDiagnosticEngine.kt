@@ -103,6 +103,8 @@ class GeminiLiveDiagnosticEngine {
     private val _isGeminiSpeaking = MutableStateFlow(false)
     val isGeminiSpeaking: StateFlow<Boolean> = _isGeminiSpeaking.asStateFlow()
 
+    private val isGeminiTurnActive = AtomicBoolean(false)
+
     private val _isAudioPlaying = MutableStateFlow(false)
     val isAudioPlaying: StateFlow<Boolean> = _isAudioPlaying.asStateFlow()
 
@@ -212,6 +214,7 @@ class GeminiLiveDiagnosticEngine {
                 log(LogLevel.WARN, "[TURN] No model response 15s after user speech - session stalled")
                 _connectionErrorMessage.value = stallMsg
                 _lockErrorEvent.tryEmit(stallMsg)
+                disconnectInternal("15s response watchdog timeout")
             }
         }
     }
@@ -693,6 +696,7 @@ class GeminiLiveDiagnosticEngine {
 
         _isConnecting.value = true
         _isGeminiSpeaking.value = false
+        isGeminiTurnActive.set(false)
         _pipelineStatus.value = PipelineStatusState()
 
         // Reset analysis & engine state
@@ -702,6 +706,7 @@ class GeminiLiveDiagnosticEngine {
         audioPlaybackEngine.prepare()
         audioPlaybackEngine.onPlaybackDrained = {
             _isGeminiSpeaking.value = false
+            isGeminiTurnActive.set(false)
             playTurnBeep()
             if (isPrayerCompletedTurn()) {
                 lastContext?.let { ctx ->
@@ -1331,7 +1336,7 @@ class GeminiLiveDiagnosticEngine {
                 val recEngine = audioRecordingEngine
                 if (recEngine != null) {
                     if (recEngine.hasRecordAudioPermission()) {
-                        val started = recEngine.startRecording(webSocket) { _isGeminiSpeaking.value || audioPlaybackEngine.isPlaying() }
+                        val started = recEngine.startRecording(webSocket) { _isGeminiSpeaking.value || audioPlaybackEngine.isPlaying() || isGeminiTurnActive.get() }
                         if (!started) {
                             val err = "Microphone unavailable. Tap to retry."
                             log(LogLevel.ERROR, "[MIC RECORD] startRecording failed on setupComplete")
@@ -1381,6 +1386,7 @@ class GeminiLiveDiagnosticEngine {
 
                 if (serverContent.has("modelTurn")) {
                     _isGeminiSpeaking.value = true
+                    isGeminiTurnActive.set(true)
                     lastServerAudioMs = System.currentTimeMillis()
                     if (generationStartedLogged.compareAndSet(false, true)) {
                         setStreamState(StreamState.RECEIVING_STREAM)
@@ -1439,7 +1445,6 @@ class GeminiLiveDiagnosticEngine {
                     lastServerAudioMs = System.currentTimeMillis()
                     setStreamState(StreamState.TURN_COMPLETE)
                     generationStartedLogged.set(false)
-                    _isGeminiSpeaking.value = false
                     audioPlaybackEngine.notifyTurnCompleted()
 
                     if (!hasReceivedAnyTranscription && _isTranscriptAvailable.value) {
@@ -1451,6 +1456,8 @@ class GeminiLiveDiagnosticEngine {
                     log(LogLevel.SUCCESS, "[generationFinished] generationFinished - Gemini completed response")
 
                     if (!audioPlaybackEngine.hasWrittenAudioInCurrentTurn()) {
+                        _isGeminiSpeaking.value = false
+                        isGeminiTurnActive.set(false)
                         playTurnBeep()
                         if (isPrayerCompletedTurn()) {
                             lastContext?.let { ctx ->
@@ -1477,6 +1484,7 @@ class GeminiLiveDiagnosticEngine {
                                 log(LogLevel.WARN, "Watchdog: forced end of draining state after 5s")
                                 audioPlaybackEngine.stopPlaybackImmediate("5s drain timeout")
                                 _isGeminiSpeaking.value = false
+                                isGeminiTurnActive.set(false)
                                 playTurnBeep()
                             }
                         }
@@ -1491,6 +1499,7 @@ class GeminiLiveDiagnosticEngine {
                     setStreamState(StreamState.TURN_COMPLETE)
                     generationStartedLogged.set(false)
                     _isGeminiSpeaking.value = false
+                    isGeminiTurnActive.set(false)
                     audioPlaybackEngine.notifyTurnCompleted()
                     log(LogLevel.WARN, "[interrupted] Model turn interrupted by server")
                     audioPlaybackEngine.stopPlaybackImmediate("Model turn interrupted by server VAD")
@@ -1731,7 +1740,7 @@ class GeminiLiveDiagnosticEngine {
                 }
             )
         }
-        val started = audioRecordingEngine?.startRecording(ws) { _isGeminiSpeaking.value || audioPlaybackEngine.isPlaying() }
+        val started = audioRecordingEngine?.startRecording(ws) { _isGeminiSpeaking.value || audioPlaybackEngine.isPlaying() || isGeminiTurnActive.get() }
         if (started == false) {
             val err = "Microphone unavailable. Tap to retry."
             _connectionErrorMessage.value = err
@@ -1801,6 +1810,7 @@ class GeminiLiveDiagnosticEngine {
     private fun disconnectInternal(reason: String) {
         isUserDisconnecting.set(true)
         _isGeminiSpeaking.value = false
+        isGeminiTurnActive.set(false)
         _isAudioPlaying.value = false
         _isMicSending.value = false
         _isWaitingForResponse.value = false
@@ -1823,6 +1833,7 @@ class GeminiLiveDiagnosticEngine {
             val summary = recEngine.getSummary()
             log(LogLevel.INFO, summary)
             recEngine.reset()
+            audioRecordingEngine = null
         }
 
         try {

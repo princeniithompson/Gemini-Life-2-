@@ -72,10 +72,11 @@ object OvernightJournal {
 
         val powerManager = context.getSystemService(Context.POWER_SERVICE) as? PowerManager
         val isIgnoringBattery = powerManager?.isIgnoringBatteryOptimizations(context.packageName) ?: false
+        val pipGranted = PermissionHelper.hasPipPermission(context)
 
         val auditMessage = "[$source] RECORD_AUDIO=$audioGranted, POST_NOTIFICATIONS=$notifGranted, " +
                 "SYSTEM_ALERT_WINDOW=$overlayGranted, canScheduleExactAlarms=$canScheduleExact, " +
-                "isIgnoringBatteryOptimizations=$isIgnoringBattery"
+                "isIgnoringBatteryOptimizations=$isIgnoringBattery, PICTURE_IN_PICTURE=$pipGranted"
 
         log(context, "PERMISSION", auditMessage)
     }

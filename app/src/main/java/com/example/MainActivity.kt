@@ -2,15 +2,18 @@ package com.example
 
 import android.Manifest
 import android.app.NotificationManager
+import android.app.PictureInPictureParams
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.content.res.Configuration
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.PowerManager
 import android.provider.Settings
 import android.util.Log
+import android.util.Rational
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -23,7 +26,11 @@ import androidx.compose.runtime.setValue
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -46,6 +53,95 @@ import com.example.wake.WakePrefsManager
 class MainActivity : ComponentActivity() {
 
     private val diagnosticViewModel: DiagnosticViewModel by viewModels()
+
+    var isInPipMode by androidx.compose.runtime.mutableStateOf(false)
+        private set
+
+    var isVideoGuideActive by androidx.compose.runtime.mutableStateOf(false)
+    var lastVideoPosition by androidx.compose.runtime.mutableIntStateOf(0)
+
+    override fun onPictureInPictureModeChanged(
+        isInPictureInPictureMode: Boolean,
+        newConfig: Configuration
+    ) {
+        super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
+        isInPipMode = isInPictureInPictureMode
+    }
+
+    private fun getSafePipRational(width: Int, height: Int): Rational {
+        if (width <= 0 || height <= 0) {
+            return Rational(9, 16)
+        }
+        val ratio = width.toFloat() / height.toFloat()
+        return when {
+            ratio < 0.418410f -> Rational(1000, 2390)
+            ratio > 2.390000f -> Rational(2390, 1000)
+            else -> Rational(width, height)
+        }
+    }
+
+    fun updatePipParams(videoFile: java.io.File? = null, autoEnter: Boolean = true) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            try {
+                if (packageManager.hasSystemFeature(PackageManager.FEATURE_PICTURE_IN_PICTURE)) {
+                    val fileToUse = videoFile ?: com.example.ui.key.GuideVideoLoader.getCachedVideoFile(this)
+                    val (w, h) = com.example.ui.key.GuideVideoLoader.getVideoDimensions(fileToUse)
+                    val rational = getSafePipRational(w, h)
+                    val builder = PictureInPictureParams.Builder()
+                        .setAspectRatio(rational)
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                        builder.setAutoEnterEnabled(autoEnter)
+                        builder.setSeamlessResizeEnabled(true)
+                    }
+                    setPictureInPictureParams(builder.build())
+                    Log.d("MainActivity", "[PIP] updatePipParams: autoEnter=$autoEnter, ratio=$rational")
+                }
+            } catch (e: Exception) {
+                Log.w("MainActivity", "[PIP] Failed updating PiP params: ${e.message}")
+            }
+        }
+    }
+
+    fun requestPipMode(videoFile: java.io.File? = null): Boolean {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            try {
+                if (!packageManager.hasSystemFeature(PackageManager.FEATURE_PICTURE_IN_PICTURE)) {
+                    Log.w("MainActivity", "[PIP] Device does not support Picture-in-Picture feature")
+                    return false
+                }
+                if (!PermissionHelper.hasPipPermission(this)) {
+                    Log.w("MainActivity", "[PIP] Picture-in-Picture permission is not granted")
+                    PermissionHelper.openPipSettings(this)
+                    return false
+                }
+                val fileToUse = videoFile ?: com.example.ui.key.GuideVideoLoader.getCachedVideoFile(this)
+                val (w, h) = com.example.ui.key.GuideVideoLoader.getVideoDimensions(fileToUse)
+                val rational = getSafePipRational(w, h)
+                Log.d("MainActivity", "[PIP] Entering PiP mode with ratio $rational")
+                val builder = PictureInPictureParams.Builder()
+                    .setAspectRatio(rational)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    builder.setAutoEnterEnabled(true)
+                    builder.setSeamlessResizeEnabled(true)
+                }
+                val params = builder.build()
+                setPictureInPictureParams(params)
+                val success = enterPictureInPictureMode(params)
+                Log.i("MainActivity", "[PIP] enterPictureInPictureMode returned $success")
+                return success
+            } catch (e: Exception) {
+                Log.w("MainActivity", "[PIP] Failed to enter Picture-in-Picture: ${e.message}")
+            }
+        }
+        return false
+    }
+
+    override fun onUserLeaveHint() {
+        super.onUserLeaveHint()
+        if (isVideoGuideActive && PermissionHelper.hasPipPermission(this)) {
+            requestPipMode()
+        }
+    }
 
     private enum class FirstRunStep {
         IDLE,
@@ -134,7 +230,6 @@ class MainActivity : ComponentActivity() {
 
         checkAndRequestFirstRunPermissions()
         com.example.wake.OvernightJournal.logPermissionsAudit(this, "MainActivity.onCreate")
-        WakeDetectorService.startService(this)
         com.example.wake.PrayerAlarmScheduler.scheduleNextPrayer(this)
         com.example.ui.key.GuideImageLoader.preload(this)
 
@@ -145,7 +240,81 @@ class MainActivity : ComponentActivity() {
         }
 
         setContent {
-            MyApplicationTheme {
+            if (isInPipMode) {
+                // Zero-bezel root layout bypass for Picture-in-Picture mode
+                val context = androidx.compose.ui.platform.LocalContext.current
+                val cachedVideo = com.example.ui.key.GuideVideoLoader.getCachedVideoFile(context)
+                var videoViewRef by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf<android.widget.VideoView?>(null) }
+                var showPipControls by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
+
+                androidx.compose.foundation.layout.Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(Color.Black)
+                        .clickable { showPipControls = !showPipControls },
+                    contentAlignment = androidx.compose.ui.Alignment.Center
+                ) {
+                    androidx.compose.ui.viewinterop.AndroidView(
+                        factory = { ctx ->
+                            android.widget.VideoView(ctx).apply {
+                                if (cachedVideo.exists()) {
+                                    setVideoPath(cachedVideo.absolutePath)
+                                    setOnPreparedListener { mp ->
+                                        mp.isLooping = true
+                                        if (lastVideoPosition > 0) {
+                                            seekTo(lastVideoPosition)
+                                        }
+                                        start()
+                                    }
+                                }
+                                videoViewRef = this
+                            }
+                        },
+                        update = { vv ->
+                            videoViewRef = vv
+                        },
+                        modifier = Modifier.fillMaxSize()
+                    )
+
+                    if (showPipControls) {
+                        androidx.compose.foundation.layout.Row(
+                            horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(16.dp),
+                            verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+                            modifier = Modifier
+                                .background(Color(0x88000000), androidx.compose.foundation.shape.CircleShape)
+                                .padding(horizontal = 14.dp, vertical = 8.dp)
+                        ) {
+                            androidx.compose.material3.Text(
+                                text = "-5s",
+                                color = Color.White,
+                                fontSize = 13.sp,
+                                fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
+                                modifier = Modifier.clickable {
+                                    videoViewRef?.let { vv ->
+                                        val pos = (vv.currentPosition - 5000).coerceAtLeast(0)
+                                        vv.seekTo(pos)
+                                        lastVideoPosition = pos
+                                    }
+                                }
+                            )
+                            androidx.compose.material3.Text(
+                                text = "+5s",
+                                color = Color.White,
+                                fontSize = 13.sp,
+                                fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
+                                modifier = Modifier.clickable {
+                                    videoViewRef?.let { vv ->
+                                        val pos = (vv.currentPosition + 5000)
+                                        vv.seekTo(pos)
+                                        lastVideoPosition = pos
+                                    }
+                                }
+                            )
+                        }
+                    }
+                }
+            } else {
+                MyApplicationTheme {
                 val context = androidx.compose.ui.platform.LocalContext.current
                 var currentScreen by androidx.compose.runtime.remember {
                     androidx.compose.runtime.mutableStateOf("home")
@@ -281,6 +450,7 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
 
         handleIntent(intent)
     }
@@ -387,6 +557,9 @@ class MainActivity : ComponentActivity() {
         Log.i("WakeDetector", msg)
         WakePrefsManager.logWakeEvent(msg)
 
+        // Reschedule alarm on coming to foreground (defense against OEM reschedule loss)
+        com.example.wake.PrayerAlarmScheduler.scheduleNextPrayer(this)
+
         if (firstRunStep == FirstRunStep.OVERLAY) {
             requestStep4Notifications()
         }
@@ -400,4 +573,13 @@ class MainActivity : ComponentActivity() {
         super.onDestroy()
         diagnosticViewModel.release()
     }
+}
+
+fun Context.findMainActivity(): MainActivity? {
+    var ctx = this
+    while (ctx is android.content.ContextWrapper) {
+        if (ctx is MainActivity) return ctx
+        ctx = ctx.baseContext
+    }
+    return null
 }

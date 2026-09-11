@@ -30,6 +30,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -38,6 +39,7 @@ import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
@@ -176,14 +178,14 @@ fun ProfileScreen(
     val nestedScrollConnection = remember {
         object : NestedScrollConnection {
             override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
-                val delta = available.y
-                // When close to the top of the profile, always keep navigation bar visible
-                if (scrollState.value <= 15) {
+                // When content fits on screen (no scroll needed) or close to top, always keep navigation bar visible
+                if (scrollState.maxValue <= 20 || scrollState.value <= 15) {
                     isNavVisible = true
                     accumulatedScrollDelta = 0f
                     return Offset.Zero
                 }
 
+                val delta = available.y
                 if (delta < 0f) {
                     // Scrolling down towards deeper sections (hide navigation bar)
                     if (accumulatedScrollDelta > 0f) accumulatedScrollDelta = 0f
@@ -204,9 +206,9 @@ fun ProfileScreen(
         }
     }
 
-    LaunchedEffect(scrollState.value) {
+    LaunchedEffect(scrollState.value, scrollState.maxValue) {
         ProfileScrollStateHolder.scrollPosition = scrollState.value
-        if (scrollState.value <= 15) {
+        if (scrollState.maxValue <= 20 || scrollState.value <= 15) {
             isNavVisible = true
         }
     }
@@ -222,6 +224,7 @@ fun ProfileScreen(
     val prayerHistory by remember(wakeState) { mutableStateOf(WakePrefsManager.getPrayerHistory(context)) }
 
     var prayerTimeString by remember(wakeState) { mutableStateOf(WakePrefsManager.getPrayerTime(context)) }
+    var scheduledPrayerDays by remember(wakeState) { mutableStateOf(WakePrefsManager.getPrayerScheduledDays(context)) }
     var isReminderEnabled by remember(wakeState) { mutableStateOf(WakePrefsManager.isReminderEnabled(context)) }
     var snoozeOptionsSummary by remember(wakeState) { mutableStateOf(WakePrefsManager.getSnoozeOptionsSummary(context)) }
 
@@ -401,11 +404,13 @@ fun ProfileScreen(
     val topInset = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
     val bottomInset = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
 
-    Box(
+    BoxWithConstraints(
         modifier = Modifier
             .fillMaxSize()
             .background(Color(0xFFF2EFE6)) // Cream brand canvas
     ) {
+        val isTablet = minOf(maxWidth, maxHeight) >= 600.dp
+
         // Ambient Warm Mesh Glows for rich depth (Lollipop/Liquid glass lighting)
         Canvas(modifier = Modifier.fillMaxSize()) {
             val w = size.width
@@ -445,13 +450,17 @@ fun ProfileScreen(
                 .nestedScroll(nestedScrollConnection)
                 .verticalScroll(scrollState)
                 .padding(
-                    top = topInset + 6.dp,
-                    bottom = bottomInset + 84.dp,
-                    start = 16.dp,
-                    end = 16.dp
+                    top = topInset + (if (isTablet) 16.dp else 6.dp),
+                    bottom = bottomInset + (if (isTablet) 100.dp else 84.dp),
+                    start = if (isTablet) 32.dp else 16.dp,
+                    end = if (isTablet) 32.dp else 16.dp
                 ),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
+            Column(
+                modifier = Modifier.widthIn(max = 640.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
             // Header: Tactile Circular Back Button and Centered Profile title
             Box(
                 modifier = Modifier
@@ -1411,6 +1420,29 @@ fun ProfileScreen(
                         )
                     }
 
+                    // Tactile 3D Popped Lollipop Day-of-Week Alarm Scheduler Row
+                    DayOfWeekLollipopSelector(
+                        selectedDays = scheduledPrayerDays,
+                        onDayToggled = { dayOfWeek ->
+                            val updated = if (scheduledPrayerDays.contains(dayOfWeek)) {
+                                if (scheduledPrayerDays.size > 1) {
+                                    scheduledPrayerDays - dayOfWeek
+                                } else {
+                                    // Keep at least one active day to prevent empty schedules
+                                    scheduledPrayerDays
+                                }
+                            } else {
+                                scheduledPrayerDays + dayOfWeek
+                            }
+                            WakePrefsManager.setPrayerScheduledDays(context, updated)
+                            scheduledPrayerDays = updated
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 14.dp, vertical = 6.dp)
+                            .testTag("profile_prayer_days_selector")
+                    )
+
                     HorizontalDivider(
                         color = Color(0xFFE8E0D4).copy(alpha = 0.7f),
                         thickness = 1.dp,
@@ -2022,6 +2054,7 @@ fun ProfileScreen(
                 ),
                 textAlign = TextAlign.Center
             )
+        }
         }
 
         // Floating Bottom Navigation Pill (Slides down/hides on scroll down, reappears on scroll up)
@@ -4021,3 +4054,191 @@ private fun CustomColorDialog(
         }
     }
 }
+
+private data class DayConfig(
+    val letter: String,
+    val calendarDay: Int
+)
+
+@Composable
+private fun DayOfWeekLollipopSelector(
+    selectedDays: Set<Int>,
+    onDayToggled: (Int) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    // 7 days of week: Monday through Sunday (M, T, W, T, F, S, S)
+    val days = remember {
+        listOf(
+            DayConfig("M", Calendar.MONDAY),
+            DayConfig("T", Calendar.TUESDAY),
+            DayConfig("W", Calendar.WEDNESDAY),
+            DayConfig("T", Calendar.THURSDAY),
+            DayConfig("F", Calendar.FRIDAY),
+            DayConfig("S", Calendar.SATURDAY),
+            DayConfig("S", Calendar.SUNDAY)
+        )
+    }
+
+    Row(
+        modifier = modifier,
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        days.forEach { dayConfig ->
+            val isSelected = selectedDays.contains(dayConfig.calendarDay)
+            DayLollipopButton(
+                letter = dayConfig.letter,
+                isSelected = isSelected,
+                onClick = { onDayToggled(dayConfig.calendarDay) }
+            )
+        }
+    }
+}
+
+@Composable
+private fun DayLollipopButton(
+    letter: String,
+    isSelected: Boolean,
+    onClick: () -> Unit
+) {
+    Box(
+        modifier = Modifier
+            .size(40.dp)
+            .clip(CircleShape)
+            .clickable { onClick() }
+            .testTag("prayer_day_btn_$letter"),
+        contentAlignment = Alignment.Center
+    ) {
+        if (isSelected) {
+            // ════ ACTIVATED: 3D Popped Lollipop Terracotta Sphere (Identical to Top Profile Sphere) ════
+            Box(
+                modifier = Modifier
+                    .size(36.dp)
+                    .shadow(
+                        elevation = 5.dp,
+                        shape = CircleShape,
+                        ambientColor = Color(0x40B4574E),
+                        spotColor = Color(0x4DB4574E)
+                    )
+                    .clip(CircleShape)
+                    .background(
+                        Brush.linearGradient(
+                            colors = listOf(
+                                Color(0xFFD9776C), // Lighter warm terracotta highlight
+                                Color(0xFFB4574E), // Primary terracotta
+                                Color(0xFF8A3830), // Deep rich terracotta shadow
+                                Color(0xFF5A221C)  // Rich warm brown depth
+                            ),
+                            start = Offset(0f, 0f),
+                            end = Offset(110f, 110f)
+                        )
+                    )
+                    .border(
+                        BorderStroke(
+                            1.2.dp,
+                            Brush.verticalGradient(
+                                listOf(
+                                    Color(0xFFFFD4CE).copy(alpha = 0.85f), // Specular rim gloss
+                                    Color(0xFFB4574E).copy(alpha = 0.40f)
+                                )
+                            )
+                        ),
+                        CircleShape
+                    ),
+                contentAlignment = Alignment.Center
+            ) {
+                // Specular Light Gloss Arc (Top-Left 3D Bubble Reflection)
+                Canvas(modifier = Modifier.fillMaxSize()) {
+                    val w = size.width
+                    val h = size.height
+                    drawCircle(
+                        brush = Brush.radialGradient(
+                            colors = listOf(
+                                Color.White.copy(alpha = 0.50f),
+                                Color.White.copy(alpha = 0.0f)
+                            ),
+                            center = Offset(w * 0.32f, h * 0.28f),
+                            radius = w * 0.42f
+                        )
+                    )
+                }
+
+                Text(
+                    text = letter,
+                    style = TextStyle(
+                        fontFamily = FontFamily.Serif,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 15.sp,
+                        color = Color(0xFFFDFCF8),
+                        shadow = Shadow(
+                            color = Color(0x663D1814),
+                            offset = Offset(0f, 1.5f),
+                            blurRadius = 3f
+                        )
+                    )
+                )
+            }
+        } else {
+            // ════ DEACTIVATED: Glassy Soft Ivory-Beige Inset with Warm Terracotta Letter (Matches Reference Image) ════
+            Box(
+                modifier = Modifier
+                    .size(36.dp)
+                    .shadow(
+                        elevation = 1.dp,
+                        shape = CircleShape,
+                        ambientColor = Color(0x1A2C2420),
+                        spotColor = Color(0x1A2C2420)
+                    )
+                    .clip(CircleShape)
+                    .background(
+                        Brush.verticalGradient(
+                            colors = listOf(
+                                Color(0xFFFAF7F0), // Warm satin ivory
+                                Color(0xFFF0EBE0)  // Soft biscuit depth
+                            )
+                        )
+                    )
+                    .border(
+                        BorderStroke(
+                            1.dp,
+                            Brush.verticalGradient(
+                                listOf(
+                                    Color.White.copy(alpha = 0.90f),
+                                    Color(0xFFE2D9CB)
+                                )
+                            )
+                        ),
+                        CircleShape
+                    ),
+                contentAlignment = Alignment.Center
+            ) {
+                // Subtle top inner sheen
+                Canvas(modifier = Modifier.fillMaxSize()) {
+                    val w = size.width
+                    val h = size.height
+                    drawCircle(
+                        brush = Brush.radialGradient(
+                            colors = listOf(
+                                Color.White.copy(alpha = 0.60f),
+                                Color.Transparent
+                            ),
+                            center = Offset(w * 0.5f, h * 0.2f),
+                            radius = w * 0.4f
+                        )
+                    )
+                }
+
+                Text(
+                    text = letter,
+                    style = TextStyle(
+                        fontFamily = FontFamily.Serif,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 15.sp,
+                        color = Color(0xFFB4574E).copy(alpha = 0.85f)
+                    )
+                )
+            }
+        }
+    }
+}
+

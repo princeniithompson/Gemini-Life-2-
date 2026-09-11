@@ -7,6 +7,7 @@ import android.content.Intent
 import android.graphics.PixelFormat
 import android.media.RingtoneManager
 import android.os.Build
+import android.os.PowerManager
 import android.provider.Settings
 import android.util.Log
 import android.view.Gravity
@@ -37,6 +38,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.wrapContentHeight
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Favorite
@@ -135,14 +137,116 @@ private class MyOverlayLifecycleOwner : LifecycleOwner, ViewModelStoreOwner, Sav
 
 object WakeOverlayManager {
 
+    @Volatile
+    private var servedCycleId: Long = 0L
+
+    @Volatile
+    private var isSessionActive: Boolean = false
+
+    @Volatile
+    private var isDoorShown: Boolean = false
+
+    fun isSessionActive(): Boolean = isSessionActive || isOverlayShowing()
+
+    fun isDoorShown(): Boolean = isDoorShown
+
+    fun getServedCycleId(): Long = servedCycleId
+
+    fun setServedCycleId(cycleId: Long) {
+        servedCycleId = cycleId
+    }
+
+    fun setSessionActive(active: Boolean) {
+        isSessionActive = active
+        if (active) {
+            isDoorShown = true
+        }
+    }
+
+    fun setDoorShown(shown: Boolean) {
+        isDoorShown = shown
+    }
+
+    fun resetSessionLock(context: Context? = null) {
+        isSessionActive = false
+        isDoorShown = false
+        Log.i("WakeDetector", "[WAKE] Session lock reset cleanly (isSessionActive=false, isDoorShown=false)")
+        context?.let { OvernightJournal.log(it, "SCHEDULER", "Session lock reset cleanly") }
+    }
+
     private var overlayView: View? = null
     private var lifecycleOwner: MyOverlayLifecycleOwner? = null
+    private var activeWakeLock: PowerManager.WakeLock? = null
+
+    fun acquireWakeLock(context: Context) {
+        try {
+            releaseWakeLock()
+            val powerManager = context.getSystemService(Context.POWER_SERVICE) as? PowerManager
+            @Suppress("DEPRECATION")
+            activeWakeLock = powerManager?.newWakeLock(
+                PowerManager.SCREEN_BRIGHT_WAKE_LOCK or
+                PowerManager.ACQUIRE_CAUSES_WAKEUP or
+                PowerManager.ON_AFTER_RELEASE,
+                "FirstLight:MorningWakeLock"
+            )?.apply {
+                setReferenceCounted(false)
+                acquire(60 * 1000L) // Hard 60-second safety timeout
+            }
+            OvernightJournal.log(context, "WAKE", "Acquired SCREEN_BRIGHT_WAKE_LOCK (max 60s timeout)")
+        } catch (e: Exception) {
+            OvernightJournal.log(context, "WAKE", "Failed acquiring wakeLock: ${e.message}")
+        }
+    }
+
+    fun releaseWakeLock() {
+        try {
+            if (activeWakeLock?.isHeld == true) {
+                activeWakeLock?.release()
+            }
+        } catch (e: Exception) {
+            Log.w("WakeDetector", "[WAKE] Error releasing wakelock: ${e.message}")
+        } finally {
+            activeWakeLock = null
+        }
+    }
 
     fun isOverlayShowing(): Boolean {
         return overlayView != null && overlayView?.parent != null
     }
 
-    fun triggerPrayerDoor(context: Context) {
+    fun triggerPrayerDoor(context: Context, cycleId: Long = 0L): Boolean {
+        val effectiveCycleId = if (cycleId > 0L) cycleId else System.currentTimeMillis()
+        val isAdHoc = (cycleId == 0L)
+
+        // 1. If a session is currently active -> no-op
+        if (isSessionActive()) {
+            val reason = "session currently active"
+            Log.i("WakeDetector", "[WAKE] trigger for cycle $effectiveCycleId rejected: $reason")
+            OvernightJournal.log(context, "SCHEDULER", "trigger for cycle $effectiveCycleId rejected: $reason")
+            return false
+        }
+
+        // 2. If scheduled cycle was already served -> no-op
+        if (!isAdHoc && servedCycleId == effectiveCycleId) {
+            val reason = "cycle already served"
+            Log.i("WakeDetector", "[WAKE] trigger for cycle $effectiveCycleId rejected: $reason")
+            OvernightJournal.log(context, "SCHEDULER", "trigger for cycle $effectiveCycleId rejected: $reason")
+            return false
+        }
+
+        // 3. Accepted: start new session
+        val reason = if (isAdHoc) "manual Pray Now / ad-hoc cycle" else "scheduled prayer cycle"
+        Log.i("WakeDetector", "[WAKE] trigger for cycle $effectiveCycleId accepted: $reason")
+        OvernightJournal.log(context, "SCHEDULER", "trigger for cycle $effectiveCycleId accepted: $reason")
+
+        servedCycleId = effectiveCycleId
+        setSessionActive(true)
+
+        // Pending-alarm cancellation stays only in the Proceed / Pray Now path
+        if (isAdHoc) {
+            PrayerAlarmScheduler.cancelPendingPrayerAlarms(context)
+        }
+
         WakePrefsManager.setRitualPending(context, true, reason = "door displayed")
         FirstLightNotificationHelper.cancelNotification(context)
 
@@ -156,19 +260,38 @@ object WakeOverlayManager {
             } else {
                 Log.i("WakeDetector", "[WAKE] Overlay already attached")
                 OvernightJournal.log(context, "SCHEDULER", "Overlay already attached, skipped show")
+                releaseWakeLock()
             }
         } else {
             val msg = "[WAKE] Overlay permission missing - notification fallback"
             Log.w("WakeDetector", msg)
             WakePrefsManager.logWakeEvent(msg)
             OvernightJournal.log(context, "SCHEDULER", "Overlay show attempt failed: Overlay permission missing - posting notification fallback")
+            releaseWakeLock()
             postNotificationFallback(context)
+        }
+        return true
+    }
+
+    private fun detachOverlayView(context: Context) {
+        try {
+            val currentView = overlayView
+            if (currentView != null && currentView.parent != null) {
+                val windowManager = context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
+                windowManager.removeView(currentView)
+            }
+        } catch (e: Exception) {
+            Log.w("WakeDetector", "[WAKE] Exception detaching overlay view: ${e.message}")
+        } finally {
+            lifecycleOwner?.onDestroy()
+            lifecycleOwner = null
+            overlayView = null
         }
     }
 
     fun showOverlay(context: Context) {
         val windowManager = context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
-        removeOverlay(context)
+        detachOverlayView(context)
 
         val owner = MyOverlayLifecycleOwner()
         owner.onCreate()
@@ -209,46 +332,38 @@ object WakeOverlayManager {
             Log.i("WakeDetector", msg)
             WakePrefsManager.logWakeEvent(msg)
             OvernightJournal.log(context, "SCHEDULER", "Overlay show attempt SUCCESS: WindowManager.addView completed with TYPE_APPLICATION_OVERLAY")
+            // Release SCREEN_BRIGHT_WAKE_LOCK immediately once window is attached and visible
+            releaseWakeLock()
         } catch (e: Exception) {
             val msg = "[WAKE] Overlay blocked by OEM security - notification fallback"
             Log.w("WakeDetector", msg, e)
             WakePrefsManager.logWakeEvent(msg)
             OvernightJournal.log(context, "SCHEDULER", "Overlay show attempt FAILED: ${e.message} - notification fallback")
             removeOverlay(context)
+            releaseWakeLock()
             postNotificationFallback(context)
         }
     }
 
     fun hideForCall(context: Context) {
         try {
-            val currentView = overlayView
-            if (currentView != null && currentView.parent != null) {
-                val windowManager = context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
-                windowManager.removeView(currentView)
-            }
+            resetSessionLock(context)
+            releaseWakeLock()
+            detachOverlayView(context)
         } catch (e: Exception) {
             Log.w("WakeDetector", "[WAKE] Exception removing overlay view for call: ${e.message}")
-        } finally {
-            lifecycleOwner?.onDestroy()
-            lifecycleOwner = null
-            overlayView = null
         }
     }
 
     fun removeOverlay(context: Context) {
         try {
+            resetSessionLock(context)
+            releaseWakeLock()
+            WakeDetectorService.engine.disconnect()
             WakeDetectorService.engine.abandonAudioFocus(context)
-            val currentView = overlayView
-            if (currentView != null && currentView.parent != null) {
-                val windowManager = context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
-                windowManager.removeView(currentView)
-            }
+            detachOverlayView(context)
         } catch (e: Exception) {
             Log.w("WakeDetector", "[WAKE] Exception removing overlay view: ${e.message}")
-        } finally {
-            lifecycleOwner?.onDestroy()
-            lifecycleOwner = null
-            overlayView = null
         }
     }
 
@@ -590,13 +705,25 @@ private fun WakeOverlayRoot(context: Context) {
 
                         Spacer(modifier = Modifier.height(4.dp))
 
-                        Text(
-                            text = statusSubtitle,
-                            style = MaterialTheme.typography.bodyMedium.copy(
-                                color = Color(0xFF8B7E72)
-                            ),
-                            textAlign = TextAlign.Center
-                        )
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp, Alignment.CenterHorizontally)
+                        ) {
+                            if (isMicSending && !isSpeaking && !isAudioPlaying) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(8.dp)
+                                        .background(Color(0xFF6B8F5A), shape = CircleShape)
+                                )
+                            }
+                            Text(
+                                text = statusSubtitle,
+                                style = MaterialTheme.typography.bodyMedium.copy(
+                                    color = Color(0xFF8B7E72)
+                                ),
+                                textAlign = TextAlign.Center
+                            )
+                        }
 
                         Spacer(modifier = Modifier.height(20.dp))
 

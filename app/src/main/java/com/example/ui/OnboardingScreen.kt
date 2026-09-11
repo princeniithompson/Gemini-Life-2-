@@ -73,6 +73,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -527,7 +528,14 @@ fun OnboardingScreen(
     var isDayFocused by remember { mutableStateOf(false) }
     var isYearFocused by remember { mutableStateOf(false) }
 
-    var currentStep by remember { mutableIntStateOf(1) }
+    var currentStep by rememberSaveable { 
+        val saved = WakePrefsManager.getOnboardingStep(context)
+        mutableIntStateOf(if (saved in 1..4) saved else 1)
+    }
+
+    LaunchedEffect(currentStep) {
+        WakePrefsManager.setOnboardingStep(context, currentStep)
+    }
     var userNameInput by remember { mutableStateOf(WakePrefsManager.getUserName(context)) }
 
     val existingDob = WakePrefsManager.getUserDob(context)

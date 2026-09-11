@@ -10,30 +10,26 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.ServiceInfo
 import android.os.Build
+import android.os.Handler
 import android.os.IBinder
-import android.os.PowerManager
+import android.os.Looper
 import android.telephony.PhoneStateListener
 import android.telephony.TelephonyCallback
 import android.telephony.TelephonyManager
 import android.util.Log
-import android.os.Handler
-import android.os.Looper
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import com.example.BuildConfig
 import com.example.R
 import com.example.diagnostic.GeminiLiveDiagnosticEngine
 import com.example.diagnostic.StreamState
-import com.example.diagnostic.TranscriptLine
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
-import java.util.Locale
 
 enum class OverlayPage {
     CLOSED,
@@ -71,6 +67,15 @@ class WakeDetectorService : Service() {
             }
         }
 
+        fun stopService(context: Context) {
+            try {
+                instance?.stopSelf()
+                context.stopService(Intent(context, WakeDetectorService::class.java))
+            } catch (e: Exception) {
+                Log.w("WakeDetector", "[WAKE] Error stopping service: ${e.message}")
+            }
+        }
+
         fun simulateWakeTrigger(context: Context) {
             val msg = "[WAKE-TEST] Simulated wake trigger executed"
             Log.i("WakeDetector", msg)
@@ -84,12 +89,7 @@ class WakeDetectorService : Service() {
         }
 
         fun rescheduleTrigger(context: Context) {
-            instance?.let { service ->
-                service.lastArmedTriggerTime = -1L
-                service.serviceScope.launch(Dispatchers.Default) {
-                    service.tickScheduler()
-                }
-            }
+            PrayerAlarmScheduler.scheduleNextPrayer(context)
         }
 
         fun startPrayerSession(context: Context) {
@@ -98,6 +98,7 @@ class WakeDetectorService : Service() {
             FirstLightNotificationHelper.cancelNotification(context)
             WakePrefsManager.setRitualPending(context, false, reason = "Begin Session")
             setOverlayPage(OverlayPage.SESSION)
+            engine.disconnect()
             val apiKey = getApiKey(context)
             val modelName = "models/gemini-2.5-flash-native-audio-preview-12-2025"
             val msg = "[WAKE] Starting service-hosted prayer session..."
@@ -116,158 +117,26 @@ class WakeDetectorService : Service() {
             WakePrefsManager.setRitualPending(context, false, reason = "prayer completion")
             engine.disconnect()
             setOverlayPage(OverlayPage.CLOSED)
+            WakeOverlayManager.resetSessionLock(context)
             WakeOverlayManager.removeOverlay(context)
+            
+            // Stop foreground service immediately to restore 0 background RAM & CPU
+            instance?.stopForeground(true)
+            instance?.stopSelf()
         }
 
         private fun getApiKey(context: Context): String {
             return com.example.api.ApiKeyProvider.getApiKey(context)
         }
-
-        private fun String?.isNullByBlank(): Boolean = this.isNullOrBlank()
     }
 
     private val serviceScope = CoroutineScope(Dispatchers.Main + Job())
-    private var sessionTimeoutJob: Job? = null
-    private var schedulerJob: Job? = null
-    private var lastArmedTriggerTime: Long = -1L
 
     private var telephonyManager: TelephonyManager? = null
     private var telephonyCallback: Any? = null
     private var phoneStateListener: PhoneStateListener? = null
     private val callIdleHandler = Handler(Looper.getMainLooper())
     private var callIdleRunnable: Runnable? = null
-
-    private fun startSchedulerTicker() {
-        // Ensure hardware AlarmManager exact wakeup is primed
-        PrayerAlarmScheduler.scheduleNextPrayer(this)
-        schedulerJob?.cancel()
-        schedulerJob = serviceScope.launch(Dispatchers.Default) {
-            while (true) {
-                try {
-                    tickScheduler()
-                } catch (e: Exception) {
-                    Log.e("WakeDetector", "[SCHEDULER] Error in scheduler tick: ${e.message}", e)
-                }
-                delay(300_000L) // 5-minute ultra-low-power sanity check (exact trigger is handled by AlarmManager)
-            }
-        }
-    }
-
-    private fun checkMissedPastTrigger() {
-        // Obsolete auto-trigger on startup replaced by real-time scheduler evaluation
-    }
-
-    private fun tickScheduler() {
-        val now = System.currentTimeMillis()
-        val snoozeUntil = WakePrefsManager.getSnoozeUntil(this)
-        val (hour, minute) = WakePrefsManager.getPrayerHourMinute(this)
-        val isRitualPending = WakePrefsManager.isRitualPending(this)
-
-        val cal = java.util.Calendar.getInstance().apply {
-            set(java.util.Calendar.HOUR_OF_DAY, hour)
-            set(java.util.Calendar.MINUTE, minute)
-            set(java.util.Calendar.SECOND, 0)
-            set(java.util.Calendar.MILLISECOND, 0)
-        }
-        var basePrayerTime = cal.timeInMillis
-
-        // If today's configured time is already in the past by more than 1 minute (and not snoozed),
-        // look ahead to tomorrow's prayer time unless it was just edited
-        if (snoozeUntil <= 0L && now > basePrayerTime + 60_000L) {
-            cal.add(java.util.Calendar.DAY_OF_YEAR, 1)
-            basePrayerTime = cal.timeInMillis
-        }
-
-        val triggerTime = if (snoozeUntil > 0L) snoozeUntil else basePrayerTime
-        val lastDoor = WakePrefsManager.getLastDoorTriggerTime(this)
-
-        val nowFormatted = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(java.util.Date(now))
-        val targetFormatted = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(java.util.Date(triggerTime))
-        val snoozeFormatted = if (snoozeUntil > 0L) java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(java.util.Date(snoozeUntil)) else "none"
-        val lastDoorFormatted = if (lastDoor > 0L) java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(java.util.Date(lastDoor)) else "none"
-
-        OvernightJournal.log(
-            this,
-            "SCHEDULER",
-            "Heartbeat tick - now=$nowFormatted, target=$targetFormatted, ritualPending=$isRitualPending, snoozeUntil=$snoozeFormatted, lastDoor=$lastDoorFormatted"
-        )
-
-        if (triggerTime != lastArmedTriggerTime) {
-            lastArmedTriggerTime = triggerTime
-            val timeFormatted = java.text.SimpleDateFormat("h:mm a", Locale.US).format(java.util.Date(triggerTime))
-            val armMsg = "[SCHEDULER] trigger armed for $timeFormatted"
-            Log.i("WakeDetector", armMsg)
-            WakePrefsManager.logWakeEvent(armMsg)
-        }
-
-        val reminderWindowStart = triggerTime - 30_000L
-        val lastReminder = WakePrefsManager.getLastReminderTriggerTime(this)
-        val isReminderEnabled = WakePrefsManager.isReminderEnabled(this)
-
-        // Show 30-second reminder when within 30-second window up to base prayer time (never during snooze)
-        if (snoozeUntil <= 0L && isReminderEnabled && now in reminderWindowStart until triggerTime && lastReminder != triggerTime) {
-            WakePrefsManager.setLastReminderTriggerTime(this, triggerTime)
-            FirstLightNotificationHelper.postState1Reminder(this)
-            val remMsg = "[SCHEDULER] 30s alarm reminder posted"
-            Log.i("WakeDetector", remMsg)
-            WakePrefsManager.logWakeEvent(remMsg)
-            OvernightJournal.log(this, "SCHEDULER", remMsg)
-        }
-
-        // Fire prayer door when trigger time arrives
-        if (now >= triggerTime && lastDoor != triggerTime) {
-            WakePrefsManager.setLastDoorTriggerTime(this, triggerTime)
-            FirstLightNotificationHelper.cancelNotification(this)
-            val doorMsg = "[SCHEDULER] door fired at trigger"
-            Log.i("WakeDetector", doorMsg)
-            WakePrefsManager.logWakeEvent(doorMsg)
-            OvernightJournal.log(this, "SCHEDULER", doorMsg)
-
-            acquireWakeLock(this)
-
-            if (snoozeUntil > 0L) {
-                WakePrefsManager.setSnoozeUntil(this, 0L)
-            }
-
-            WakePrefsManager.setRitualPending(this, true, reason = "alarm door")
-            serviceScope.launch(Dispatchers.Main) {
-                WakeOverlayManager.triggerPrayerDoor(this@WakeDetectorService)
-            }
-        }
-    }
-
-    private fun acquireWakeLock(context: Context) {
-        try {
-            val powerManager = context.getSystemService(Context.POWER_SERVICE) as? PowerManager
-            @Suppress("DEPRECATION")
-            val wakeLock = powerManager?.newWakeLock(
-                PowerManager.SCREEN_BRIGHT_WAKE_LOCK or
-                PowerManager.ACQUIRE_CAUSES_WAKEUP or
-                PowerManager.ON_AFTER_RELEASE,
-                "FirstLight:MorningWakeLock"
-            )
-            wakeLock?.acquire(3 * 60 * 1000L) // 3 minutes
-            OvernightJournal.log(context, "WAKE", "Acquired SCREEN_BRIGHT_WAKE_LOCK with ACQUIRE_CAUSES_WAKEUP (3 min)")
-        } catch (e: Exception) {
-            OvernightJournal.log(context, "WAKE", "Failed acquiring wakeLock: ${e.message}")
-        }
-    }
-
-    @Suppress("DEPRECATION")
-    private val wallpaperReceiver = object : BroadcastReceiver() {
-        override fun onReceive(context: Context, intent: Intent) {
-            if (intent.action == Intent.ACTION_WALLPAPER_CHANGED) {
-                if (com.example.customization.VersePrefsManager.isVerseEnabled(context)) {
-                    if (!com.example.customization.WallpaperVerseRenderer.isSelfUpdatingWallpaper) {
-                        Log.i("WallpaperVerseRenderer", "[WALLPAPER] Wallpaper changed - recomposited")
-                        serviceScope.launch(Dispatchers.IO) {
-                            com.example.customization.WallpaperVerseRenderer.applyWallpaper(context)
-                        }
-                    }
-                }
-            }
-        }
-    }
 
     private val screenReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
@@ -282,7 +151,7 @@ class WakeDetectorService : Service() {
                     OvernightJournal.log(context, "SCHEDULER", msg)
                 }
                 Intent.ACTION_SCREEN_ON -> {
-                    val keyguardManager = context.getSystemService(Context.KEYGUARD_SERVICE) as? android.app.KeyguardManager
+                    val keyguardManager = context.getSystemService(Context.KEYGUARD_SERVICE) as? KeyguardManager
                     val isLocked = keyguardManager?.isKeyguardLocked ?: false
                     val isTodayCompleted = WakePrefsManager.isPrayerCompletedToday(context)
                     val isSessionActive = engine.streamState.value != StreamState.DISCONNECTED && engine.streamState.value != StreamState.IDLE
@@ -333,7 +202,7 @@ class WakeDetectorService : Service() {
         createNotificationChannels()
         startForegroundNotification()
 
-        OvernightJournal.logPermissionsAudit(this, "WakeDetectorService.onCreate")
+        OvernightJournal.logPermissionsAudit(this, "WakeDetectorService.onCreate (on-demand)")
 
         val filter = IntentFilter().apply {
             addAction(Intent.ACTION_SCREEN_OFF)
@@ -341,23 +210,14 @@ class WakeDetectorService : Service() {
             addAction(Intent.ACTION_USER_PRESENT)
         }
         registerReceiver(screenReceiver, filter)
-
-        try {
-            @Suppress("DEPRECATION")
-            registerReceiver(wallpaperReceiver, IntentFilter(Intent.ACTION_WALLPAPER_CHANGED))
-        } catch (e: Exception) {
-            Log.w("WakeDetector", "Failed registering wallpaperReceiver: ${e.message}")
-        }
         
         registerTelephonyListener()
         
-        val msg = "[WAKE] WakeDetectorService created & BroadcastReceiver registered"
+        val msg = "[WAKE] WakeDetectorService started on-demand for active session"
         Log.i("WakeDetector", msg)
         WakePrefsManager.logWakeEvent(msg)
         OvernightJournal.log(this, "SCHEDULER", msg)
         WakePrefsManager.updateWakeState(this)
-
-        startSchedulerTicker()
 
         // Observe prayer completion event
         serviceScope.launch {
@@ -382,6 +242,7 @@ class WakeDetectorService : Service() {
                     Log.e("WakeDetector", errorMsg)
                     WakePrefsManager.logWakeEvent(errorMsg)
                     WakePrefsManager.setRitualPending(this@WakeDetectorService, true, reason = "session error")
+                    engine.disconnect()
                     setOverlayPage(OverlayPage.ERROR)
                 }
             }
@@ -394,6 +255,7 @@ class WakeDetectorService : Service() {
                     Log.e("WakeDetector", errorMsg)
                     WakePrefsManager.logWakeEvent(errorMsg)
                     WakePrefsManager.setRitualPending(this@WakeDetectorService, true, reason = "connection error")
+                    engine.disconnect()
                     setOverlayPage(OverlayPage.ERROR)
                 }
             }
@@ -483,14 +345,14 @@ class WakeDetectorService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         WakePrefsManager.updateWakeState(this)
-        return START_STICKY
+        return START_NOT_STICKY
     }
 
     override fun onDestroy() {
         super.onDestroy()
         if (instance == this) instance = null
-        schedulerJob?.cancel()
         engine.disconnect()
+        WakeOverlayManager.resetSessionLock(this)
         WakeOverlayManager.removeOverlay(this)
         unregisterTelephonyListener()
         callIdleRunnable?.let { callIdleHandler.removeCallbacks(it) }
@@ -499,12 +361,7 @@ class WakeDetectorService : Service() {
         } catch (e: Exception) {
             // Ignored if already unregistered
         }
-        try {
-            unregisterReceiver(wallpaperReceiver)
-        } catch (e: Exception) {
-            // Ignored if already unregistered
-        }
-        val msg = "[WAKE] WakeDetectorService destroyed"
+        val msg = "[WAKE] WakeDetectorService destroyed (idle state restored)"
         Log.i("WakeDetector", msg)
         WakePrefsManager.logWakeEvent(msg)
     }
@@ -520,7 +377,7 @@ class WakeDetectorService : Service() {
                 "Wake Detector Service",
                 NotificationManager.IMPORTANCE_LOW
             ).apply {
-                description = "Monitors screen unlock events for morning prayer"
+                description = "Active during live morning prayer session"
             }
             nm.createNotificationChannel(fgsChannel)
 
@@ -538,20 +395,54 @@ class WakeDetectorService : Service() {
     fun startForegroundNotification() {
         val notification = NotificationCompat.Builder(this, FGS_CHANNEL_ID)
             .setSmallIcon(R.mipmap.ic_launcher)
-            .setContentTitle("Wake Detector Active")
-            .setContentText("Morning prayer watch active")
+            .setContentTitle("First Light Active")
+            .setContentText("Morning prayer in progress")
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setOngoing(true)
             .build()
 
         if (Build.VERSION.SDK_INT >= 34) {
-            try {
-                startForeground(FGS_NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
-            } catch (e: Exception) {
-                Log.e("WakeDetector", "Failed startForeground with specialUse: ${e.message}")
+            val hasMicPermission = ContextCompat.checkSelfPermission(
+                this,
+                android.Manifest.permission.RECORD_AUDIO
+            ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+
+            var started = false
+            if (hasMicPermission) {
+                try {
+                    startForeground(
+                        FGS_NOTIFICATION_ID,
+                        notification,
+                        ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+                    )
+                    started = true
+                } catch (e: Exception) {
+                    Log.w("WakeDetector", "startForeground with SPECIAL_USE|MICROPHONE failed: ${e.message}")
+                }
+            }
+
+            if (!started) {
+                try {
+                    startForeground(
+                        FGS_NOTIFICATION_ID,
+                        notification,
+                        ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+                    )
+                } catch (e: Exception) {
+                    Log.e("WakeDetector", "startForeground with SPECIAL_USE failed: ${e.message}")
+                    try {
+                        startForeground(FGS_NOTIFICATION_ID, notification)
+                    } catch (e2: Exception) {
+                        Log.e("WakeDetector", "startForeground fallback failed: ${e2.message}")
+                    }
+                }
             }
         } else {
-            startForeground(FGS_NOTIFICATION_ID, notification)
+            try {
+                startForeground(FGS_NOTIFICATION_ID, notification)
+            } catch (e: Exception) {
+                Log.e("WakeDetector", "startForeground failed: ${e.message}")
+            }
         }
     }
 }

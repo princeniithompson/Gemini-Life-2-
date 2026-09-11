@@ -48,12 +48,78 @@ object PermissionHelper {
         }
     }
 
+    fun hasPipPermission(context: Context): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return false
+        val appOps = context.getSystemService(Context.APP_OPS_SERVICE) as? android.app.AppOpsManager ?: return false
+        return try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                appOps.unsafeCheckOpNoThrow(
+                    android.app.AppOpsManager.OPSTR_PICTURE_IN_PICTURE,
+                    android.os.Process.myUid(),
+                    context.packageName
+                ) == android.app.AppOpsManager.MODE_ALLOWED
+            } else {
+                appOps.checkOpNoThrow(
+                    android.app.AppOpsManager.OPSTR_PICTURE_IN_PICTURE,
+                    android.os.Process.myUid(),
+                    context.packageName
+                ) == android.app.AppOpsManager.MODE_ALLOWED
+            }
+        } catch (e: Exception) {
+            true
+        }
+    }
+
+    fun openPipSettings(context: Context) {
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                val intent = Intent("android.settings.PICTURE_IN_PICTURE_SETTINGS", Uri.parse("package:${context.packageName}")).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                context.startActivity(intent)
+                OvernightJournal.log(context, "PERMS", "Opened PiP settings")
+                return
+            }
+        } catch (e: Exception) {
+            Log.w("PermissionHelper", "Failed opening PiP direct settings: ${e.message}")
+        }
+        try {
+            context.startActivity(getAppSettingsIntent(context, newTask = true))
+        } catch (_: Exception) {}
+    }
+
     fun hasExactAlarmPermission(context: Context): Boolean {
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as? AlarmManager
             alarmManager?.canScheduleExactAlarms() ?: true
         } else {
             true
+        }
+    }
+
+    fun isIgnoringBatteryOptimizations(context: Context): Boolean {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            val powerManager = context.getSystemService(Context.POWER_SERVICE) as? android.os.PowerManager
+            powerManager?.isIgnoringBatteryOptimizations(context.packageName) ?: true
+        } else {
+            true
+        }
+    }
+
+    fun requestIgnoreBatteryOptimizations(context: Context) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            try {
+                val intent = Intent(
+                    Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                    Uri.parse("package:${context.packageName}")
+                ).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                context.startActivity(intent)
+                OvernightJournal.log(context, "PERMS", "Requested ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS")
+            } catch (e: Exception) {
+                Log.w("PermissionHelper", "Failed requesting ignore battery optimizations: ${e.message}")
+            }
         }
     }
 

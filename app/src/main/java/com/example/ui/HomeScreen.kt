@@ -14,6 +14,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -25,6 +26,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -154,179 +156,201 @@ fun HomeScreen(
     val navBarPaddingBottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
 
     CompositionLocalProvider(LocalDensity provides cappedDensity) {
-        Box(
+        BoxWithConstraints(
             modifier = Modifier
                 .fillMaxSize()
                 .background(Color(0xFFF2EFE6))
         ) {
-            // Main Vertically Scrollable Content Column
+            val isTablet = minOf(maxWidth, maxHeight) >= 600.dp
+
+            // Root Layout: Fixed Header (Flame) + Scrollable Content Area (Banners, Actions, Calendar)
             Column(
                 modifier = Modifier
                     .fillMaxSize()
-                    .verticalScroll(scrollState)
                     .padding(
-                        top = statusBarPaddingTop + 12.dp,
-                        start = 20.dp,
-                        end = 20.dp,
-                        bottom = navBarPaddingBottom + 104.dp // Generous space so calendar card never touches or overlaps floating bottom nav pill
+                        top = statusBarPaddingTop + (if (isTablet) 16.dp else 4.dp),
+                        start = if (isTablet) 32.dp else 16.dp,
+                        end = if (isTablet) 32.dp else 16.dp
                     ),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                // 1. Flame Badge (Centered)
+                // 1. PINNED HERO FLAME: Stays fixed at top, lively & animated
                 StreakFireBadge(
                     streakNumber = streakCount,
                     isReducedMotion = isReducedMotion,
-                    modifier = Modifier.padding(top = 4.dp)
+                    isTablet = isTablet,
+                    modifier = Modifier.padding(top = 2.dp)
                 )
 
-                Spacer(modifier = Modifier.height(10.dp))
+                Spacer(modifier = Modifier.height(if (isTablet) 12.dp else 6.dp))
 
-                // Missing Key Warning Banner (if no working key configured)
-                if (!hasWorkingKey) {
-                    Card(
-                        onClick = { showKeySheet = true },
-                        shape = RoundedCornerShape(16.dp),
-                        colors = CardDefaults.cardColors(containerColor = Color(0xFFFDF0ED)),
-                        border = BorderStroke(1.dp, Color(0xFFD98A84)),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(bottom = 12.dp)
-                            .testTag("missing_key_home_banner")
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(14.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .size(36.dp)
-                                    .background(Color(0xFFB4574E), CircleShape),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.Key,
-                                    contentDescription = null,
-                                    tint = Color.White,
-                                    modifier = Modifier.size(18.dp)
-                                )
-                            }
-                            Spacer(modifier = Modifier.width(12.dp))
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = "Free Google API Key Needed",
-                                    fontWeight = FontWeight.Bold,
-                                    fontSize = 14.sp,
-                                    color = Color(0xFFB4574E)
-                                )
-                                Text(
-                                    text = "First Light needs your key to pray with you. Tap to connect in 1 min.",
-                                    fontSize = 12.sp,
-                                    color = Color(0xFF2C2420)
-                                )
-                            }
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(
-                                text = "Connect",
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 13.sp,
-                                color = Color(0xFFB4574E)
-                            )
-                        }
-                    }
-                }
-
-                // 2. PRAY NOW SECTION (CONDITIONAL - shown when today's prayer is pending OR force "Pray Now" simulation is ON in dev options)
-                val todayIso = String.format(Locale.US, "%04d-%02d-%02d", todayYear, todayMonth + 1, todayDay)
-                val isTodayCompleted = prayerHistory.contains(todayIso)
-                val isPreviewPrayNow = wakeState.previewPrayNow
-
-                if (!isTodayCompleted || isPreviewPrayNow) {
+                // 2. LOWER CONTENT AREA: Houses Banners, Pray Now Button, and StreakCalendarCard
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f)
+                        .verticalScroll(scrollState)
+                        .padding(
+                            bottom = navBarPaddingBottom + (if (isTablet) 110.dp else 84.dp)
+                        ),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
                     Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(bottom = 12.dp)
+                        modifier = Modifier.widthIn(max = 640.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
                     ) {
-                        Text(
-                            text = "Today's prayer is still waiting.",
-                            fontSize = 14.sp,
-                            fontWeight = FontWeight.Normal,
-                            color = Color(0xFF8B7E72),
-                            textAlign = TextAlign.Center
-                        )
+                        // Missing Key Warning Banner (if no working key configured)
+                        if (!hasWorkingKey) {
+                            Card(
+                                onClick = { showKeySheet = true },
+                                shape = RoundedCornerShape(16.dp),
+                                colors = CardDefaults.cardColors(containerColor = Color(0xFFFDF0ED)),
+                                border = BorderStroke(1.dp, Color(0xFFD98A84)),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(bottom = 12.dp)
+                                    .testTag("missing_key_home_banner")
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(14.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(36.dp)
+                                            .background(Color(0xFFB4574E), CircleShape),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Key,
+                                            contentDescription = null,
+                                            tint = Color.White,
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                    }
+                                    Spacer(modifier = Modifier.width(12.dp))
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = "Free Google API Key Needed",
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 14.sp,
+                                            color = Color(0xFFB4574E)
+                                        )
+                                        Text(
+                                            text = "First Light needs your key to pray with you. Tap to connect in 1 min.",
+                                            fontSize = 12.sp,
+                                            color = Color(0xFF2C2420)
+                                        )
+                                    }
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(
+                                        text = "Connect",
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 13.sp,
+                                        color = Color(0xFFB4574E)
+                                    )
+                                }
+                            }
+                        }
 
-                        Spacer(modifier = Modifier.height(8.dp))
+                        // Pray Now Section (CONDITIONAL - shown when today's prayer is pending OR force "Pray Now" simulation is ON in dev options)
+                        val todayIso = String.format(Locale.US, "%04d-%02d-%02d", todayYear, todayMonth + 1, todayDay)
+                        val isTodayCompleted = prayerHistory.contains(todayIso)
+                        val isPreviewPrayNow = wakeState.previewPrayNow
 
-                        Surface(
-                            onClick = {
-                                if (!ApiKeyProvider.hasWorkingKey(context)) {
-                                    showKeySheet = true
-                                    android.widget.Toast.makeText(context, "Please connect your free Google key to begin prayer", android.widget.Toast.LENGTH_SHORT).show()
+                        if (!isTodayCompleted || isPreviewPrayNow) {
+                            Column(
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(bottom = 12.dp)
+                            ) {
+                                Text(
+                                    text = "Today's prayer is still waiting.",
+                                    fontSize = if (isTablet) 16.sp else 14.sp,
+                                    fontWeight = FontWeight.Normal,
+                                    color = Color(0xFF8B7E72),
+                                    textAlign = TextAlign.Center
+                                )
+
+                                Spacer(modifier = Modifier.height(8.dp))
+
+                                Surface(
+                                    onClick = {
+                                        if (!ApiKeyProvider.hasWorkingKey(context)) {
+                                            showKeySheet = true
+                                            android.widget.Toast.makeText(context, "Please connect your free Google key to begin prayer", android.widget.Toast.LENGTH_SHORT).show()
+                                        } else {
+                                            com.example.wake.WakeOverlayManager.triggerPrayerDoor(context)
+                                        }
+                                    },
+                                    shape = CircleShape,
+                                    color = Color(0xFFB4574E),
+                                    modifier = Modifier
+                                        .shadow(
+                                            elevation = 8.dp,
+                                            shape = CircleShape,
+                                            ambientColor = Color(0x59B4574E),
+                                            spotColor = Color(0x59B4574E)
+                                        )
+                                        .testTag("pray_now_button")
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(
+                                            horizontal = if (isTablet) 36.dp else 28.dp,
+                                            vertical = if (isTablet) 16.dp else 12.dp
+                                        ),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.Center
+                                    ) {
+                                        Icon(
+                                            painter = painterResource(id = R.drawable.ic_streak_flame),
+                                            contentDescription = null,
+                                            tint = Color.White,
+                                            modifier = Modifier.size(if (isTablet) 24.dp else 20.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text(
+                                            text = "Pray Now",
+                                            fontSize = if (isTablet) 18.sp else 16.sp,
+                                            fontWeight = FontWeight.Medium,
+                                            color = Color.White
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
+                        // 3. STREAK CALENDAR CARD
+                        StreakCalendarCard(
+                            displayYear = displayYear,
+                            displayMonth = displayMonth,
+                            todayYear = todayYear,
+                            todayMonth = todayMonth,
+                            todayDay = todayDay,
+                            prayerHistory = prayerHistory,
+                            firstInstallDate = firstInstallDate,
+                            isPreviewMissedDay = isPreviewMissedDay,
+                            isTablet = isTablet,
+                            onPreviousMonth = {
+                                if (displayMonth == 0) {
+                                    displayMonth = 11
+                                    displayYear -= 1
                                 } else {
-                                    com.example.wake.WakeOverlayManager.triggerPrayerDoor(context)
+                                    displayMonth -= 1
                                 }
                             },
-                            shape = CircleShape,
-                            color = Color(0xFFB4574E),
-                            modifier = Modifier
-                                .shadow(
-                                    elevation = 8.dp,
-                                    shape = CircleShape,
-                                    ambientColor = Color(0x59B4574E),
-                                    spotColor = Color(0x59B4574E)
-                                )
-                                .testTag("pray_now_button")
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 28.dp, vertical = 12.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.Center
-                            ) {
-                                Icon(
-                                    painter = painterResource(id = R.drawable.ic_streak_flame),
-                                    contentDescription = null,
-                                    tint = Color.White,
-                                    modifier = Modifier.size(20.dp)
-                                )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text(
-                                    text = "Pray Now",
-                                    fontSize = 16.sp,
-                                    fontWeight = FontWeight.Medium,
-                                    color = Color.White
-                                )
+                            onNextMonth = {
+                                if (displayMonth == 11) {
+                                    displayMonth = 0
+                                    displayYear += 1
+                                } else {
+                                    displayMonth += 1
+                                }
                             }
-                        }
+                        )
                     }
                 }
-
-                // 3. STREAK CALENDAR CARD (Extracted Component)
-                StreakCalendarCard(
-                    displayYear = displayYear,
-                    displayMonth = displayMonth,
-                    todayYear = todayYear,
-                    todayMonth = todayMonth,
-                    todayDay = todayDay,
-                    prayerHistory = prayerHistory,
-                    firstInstallDate = firstInstallDate,
-                    isPreviewMissedDay = isPreviewMissedDay,
-                    onPreviousMonth = {
-                        if (displayMonth == 0) {
-                            displayMonth = 11
-                            displayYear -= 1
-                        } else {
-                            displayMonth -= 1
-                        }
-                    },
-                    onNextMonth = {
-                        if (displayMonth == 11) {
-                            displayMonth = 0
-                            displayYear += 1
-                        } else {
-                            displayMonth += 1
-                        }
-                    }
-                )
             }
 
             // Gradient Scrim behind Nav Pill
@@ -393,6 +417,7 @@ fun HomeScreen(
 fun StreakFireBadge(
     streakNumber: Int,
     isReducedMotion: Boolean = false,
+    isTablet: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     val infiniteTransition = rememberInfiniteTransition(label = "flicker_transition")
@@ -425,8 +450,9 @@ fun StreakFireBadge(
         modifier = modifier,
         contentAlignment = Alignment.Center
     ) {
-        val flameWidth = minOf(maxWidth * 0.45f, 140.dp)
-        val flameHeight = minOf(flameWidth * 0.88f, 125.dp)
+        val maxFlameW = if (isTablet) 200.dp else 144.dp
+        val flameWidth = minOf(maxWidth * 0.44f, maxFlameW)
+        val flameHeight = flameWidth * (255f / 188f)
 
         Column(
             horizontalAlignment = Alignment.CenterHorizontally
@@ -447,7 +473,7 @@ fun StreakFireBadge(
             // Big streak number - stays BOLD (700) near-black #1C1714 (centered under flame)
             Text(
                 text = streakNumber.toString(),
-                fontSize = 60.sp,
+                fontSize = if (isTablet) 72.sp else 54.sp,
                 fontWeight = FontWeight.Bold,
                 color = Color(0xFF1C1714),
                 maxLines = 1,
@@ -459,7 +485,7 @@ fun StreakFireBadge(
             // "Daily streak" caption in #2C2420
             Text(
                 text = "Daily streak",
-                fontSize = 14.sp,
+                fontSize = if (isTablet) 16.sp else 14.sp,
                 fontWeight = FontWeight.Normal,
                 color = Color(0xFF2C2420),
                 maxLines = 1,

@@ -24,6 +24,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -80,6 +81,7 @@ fun StreakCalendarCard(
     prayerHistory: Set<String>,
     firstInstallDate: String,
     isPreviewMissedDay: Boolean = false,
+    isTablet: Boolean = false,
     onPreviousMonth: () -> Unit,
     onNextMonth: () -> Unit,
     modifier: Modifier = Modifier
@@ -91,6 +93,25 @@ fun StreakCalendarCard(
             set(Calendar.DAY_OF_MONTH, 1)
         }
     }
+
+    val calStart = remember(displayYear, displayMonth) {
+        Calendar.getInstance().apply {
+            set(Calendar.YEAR, displayYear)
+            set(Calendar.MONTH, displayMonth)
+            set(Calendar.DAY_OF_MONTH, 1)
+        }
+    }
+    val maxDays = calStart.getActualMaximum(Calendar.DAY_OF_MONTH)
+
+    // Weekday offset for day 1 (Sunday=1 -> 6, Monday=2 -> 0, Tuesday=3 -> 1, ...)
+    val startOffset = remember(displayYear, displayMonth) {
+        val firstDayOfWeek = calStart.get(Calendar.DAY_OF_WEEK)
+        (firstDayOfWeek + 5) % 7
+    }
+
+    val totalCells = startOffset + maxDays
+    val numRows = (totalCells + 6) / 7
+    val is6Row = numRows >= 6
 
     val todayCal = remember { Calendar.getInstance() }
 
@@ -122,18 +143,23 @@ fun StreakCalendarCard(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 18.dp, vertical = 20.dp)
+                .padding(
+                    horizontal = if (isTablet) 24.dp else 10.dp,
+                    vertical = if (isTablet) 20.dp else (if (is6Row) 10.dp else 14.dp)
+                )
         ) {
             // 1. MONTH HEADER & CHEVRONS
             Row(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 4.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Column {
                     Text(
                         text = monthNameCaps,
-                        fontSize = 19.sp,
+                        fontSize = if (isTablet) 22.sp else 18.sp,
                         fontWeight = FontWeight.Bold,
                         color = Color(0xFF1C1714),
                         letterSpacing = 1.2.sp,
@@ -142,7 +168,7 @@ fun StreakCalendarCard(
                     )
                     Text(
                         text = displayYear.toString(),
-                        fontSize = 13.sp,
+                        fontSize = if (isTablet) 14.sp else 12.sp,
                         fontWeight = FontWeight.Normal,
                         color = Color(0xFF8B7E72),
                         maxLines = 1,
@@ -152,7 +178,7 @@ fun StreakCalendarCard(
 
                 Text(
                     text = todayWeekdayShort,
-                    fontSize = 14.sp,
+                    fontSize = if (isTablet) 16.sp else 13.sp,
                     fontWeight = FontWeight.Medium,
                     color = Color(0xFF1C1714),
                     maxLines = 1,
@@ -160,11 +186,13 @@ fun StreakCalendarCard(
                 )
             }
 
-            Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(if (is6Row) 4.dp else 6.dp))
 
             // Navigation Chevrons ‹ ›
             Row(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 4.dp),
                 horizontalArrangement = Arrangement.Start,
                 verticalAlignment = Alignment.CenterVertically
             ) {
@@ -177,7 +205,7 @@ fun StreakCalendarCard(
                         contentDescription = "Previous Month",
                         tint = Color(0xFF1C1714),
                         modifier = Modifier
-                            .size(24.dp)
+                            .size(if (isTablet) 28.dp else 24.dp)
                             .clickable(
                                 interactionSource = remember { MutableInteractionSource() },
                                 indication = null
@@ -189,7 +217,7 @@ fun StreakCalendarCard(
                         contentDescription = "Next Month",
                         tint = Color(0xFF1C1714),
                         modifier = Modifier
-                            .size(24.dp)
+                            .size(if (isTablet) 28.dp else 24.dp)
                             .clickable(
                                 interactionSource = remember { MutableInteractionSource() },
                                 indication = null
@@ -198,13 +226,13 @@ fun StreakCalendarCard(
                 }
             }
 
-            Spacer(modifier = Modifier.height(14.dp))
+            Spacer(modifier = Modifier.height(if (is6Row) 8.dp else 12.dp))
 
             // 2. WEEKDAY HEADER ROW (M T W T F S S)
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(bottom = 12.dp),
+                    .padding(bottom = if (is6Row) 6.dp else 10.dp),
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
                 weekdays.forEach { dayLetter ->
@@ -214,7 +242,7 @@ fun StreakCalendarCard(
                     ) {
                         Text(
                             text = dayLetter,
-                            fontSize = 12.sp,
+                            fontSize = if (isTablet) 15.sp else 13.sp,
                             fontWeight = FontWeight.Medium,
                             color = Color(0xFF8B7E72),
                             maxLines = 1,
@@ -233,7 +261,12 @@ fun StreakCalendarCard(
                 todayDay = todayDay,
                 prayerHistory = prayerHistory,
                 firstInstallDate = firstInstallDate,
-                isPreviewMissedDay = isPreviewMissedDay
+                isPreviewMissedDay = isPreviewMissedDay,
+                isTablet = isTablet,
+                is6Row = is6Row,
+                startOffset = startOffset,
+                maxDays = maxDays,
+                numRows = numRows
             )
         }
     }
@@ -248,7 +281,12 @@ private fun CalendarDaysGrid(
     todayDay: Int,
     prayerHistory: Set<String>,
     firstInstallDate: String,
-    isPreviewMissedDay: Boolean
+    isPreviewMissedDay: Boolean,
+    isTablet: Boolean = false,
+    is6Row: Boolean = false,
+    startOffset: Int = 0,
+    maxDays: Int = 31,
+    numRows: Int = 5
 ) {
     val sdf = remember { SimpleDateFormat("yyyy-MM-dd", Locale.US) }
     val todayIso = String.format(Locale.US, "%04d-%02d-%02d", todayYear, todayMonth + 1, todayDay)
@@ -260,82 +298,80 @@ private fun CalendarDaysGrid(
     }
     val yesterdayIso = sdf.format(calYesterday.time)
 
-    val calStart = remember(displayYear, displayMonth) {
-        Calendar.getInstance().apply {
-            set(Calendar.YEAR, displayYear)
-            set(Calendar.MONTH, displayMonth)
-            set(Calendar.DAY_OF_MONTH, 1)
+    BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+        val availableWidth = maxWidth
+        val cellWidth = availableWidth / 7f
+        val circleSize = if (isTablet) {
+            minOf(52.dp, cellWidth - 8.dp)
+        } else if (is6Row) {
+            minOf(38.dp, maxOf(34.dp, cellWidth - 4.dp))
+        } else {
+            minOf(44.dp, maxOf(38.dp, cellWidth - 3.dp))
         }
-    }
-    val maxDays = calStart.getActualMaximum(Calendar.DAY_OF_MONTH)
+        val rowSpacing = if (isTablet) (if (is6Row) 8.dp else 12.dp) else (if (is6Row) 4.dp else 8.dp)
 
-    // Weekday offset for day 1 (Sunday=1 -> 6, Monday=2 -> 0, Tuesday=3 -> 1, ...)
-    val startOffset = remember(displayYear, displayMonth) {
-        val firstDayOfWeek = calStart.get(Calendar.DAY_OF_WEEK)
-        (firstDayOfWeek + 5) % 7
-    }
+        Column(verticalArrangement = Arrangement.spacedBy(rowSpacing)) {
+            for (rowIndex in 0 until numRows) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    for (colIndex in 0 until 7) {
+                        val cellIndex = rowIndex * 7 + colIndex
+                        val dayNumber = cellIndex - startOffset + 1
 
-    val totalCells = startOffset + maxDays
-    val numRows = (totalCells + 6) / 7
+                        Box(
+                            modifier = Modifier.weight(1f),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            if (cellIndex >= startOffset && dayNumber <= maxDays) {
+                                val dayIso = String.format(Locale.US, "%04d-%02d-%02d", displayYear, displayMonth + 1, dayNumber)
+                                val isToday = (displayYear == todayYear && displayMonth == todayMonth && dayNumber == todayDay)
+                                val isPreInstall = dayIso < firstInstallDate
 
-    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        for (rowIndex in 0 until numRows) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                for (colIndex in 0 until 7) {
-                    val cellIndex = rowIndex * 7 + colIndex
-                    val dayNumber = cellIndex - startOffset + 1
-
-                    Box(
-                        modifier = Modifier.weight(1f),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        if (cellIndex >= startOffset && dayNumber <= maxDays) {
-                            val dayIso = String.format(Locale.US, "%04d-%02d-%02d", displayYear, displayMonth + 1, dayNumber)
-                            val isToday = (displayYear == todayYear && displayMonth == todayMonth && dayNumber == todayDay)
-                            val isPreInstall = dayIso < firstInstallDate
-
-                            val dayState = when {
-                                isPreInstall -> CalendarDayState.PRE_INSTALL
-                                else -> {
-                                    val realCompleted = prayerHistory.contains(dayIso)
-                                    val isMissed = if (isPreviewMissedDay) {
-                                        if (yesterdayIso >= firstInstallDate) {
-                                            dayIso == yesterdayIso
+                                val dayState = when {
+                                    isPreInstall -> CalendarDayState.PRE_INSTALL
+                                    else -> {
+                                        val realCompleted = prayerHistory.contains(dayIso)
+                                        val isMissed = if (isPreviewMissedDay) {
+                                            if (yesterdayIso >= firstInstallDate) {
+                                                dayIso == yesterdayIso
+                                            } else {
+                                                dayIso == firstInstallDate
+                                            }
                                         } else {
-                                            dayIso == firstInstallDate
+                                            !realCompleted && dayIso < todayIso
                                         }
-                                    } else {
-                                        !realCompleted && dayIso < todayIso
-                                    }
 
-                                    val isCompleted = if (isPreviewMissedDay) {
-                                        if (yesterdayIso >= firstInstallDate) {
-                                            if (dayIso == yesterdayIso) false else realCompleted
+                                        val isCompleted = if (isPreviewMissedDay) {
+                                            if (yesterdayIso >= firstInstallDate) {
+                                                if (dayIso == yesterdayIso) false else realCompleted
+                                            } else {
+                                                if (dayIso == firstInstallDate) false else realCompleted
+                                            }
                                         } else {
-                                            if (dayIso == firstInstallDate) false else realCompleted
+                                            realCompleted
                                         }
-                                    } else {
-                                        realCompleted
-                                    }
 
-                                    when {
-                                        isCompleted -> CalendarDayState.PRAYED
-                                        isMissed -> CalendarDayState.MISSED
-                                        else -> CalendarDayState.ACTIVE_UNPRAYED
+                                        when {
+                                            isCompleted -> CalendarDayState.PRAYED
+                                            isMissed -> CalendarDayState.MISSED
+                                            else -> CalendarDayState.ACTIVE_UNPRAYED
+                                        }
                                     }
                                 }
-                            }
 
-                            DayCircleItem(
-                                dayNumber = dayNumber,
-                                state = dayState,
-                                isToday = isToday
-                            )
-                        } else {
-                            Spacer(modifier = Modifier.size(38.dp))
+                                DayCircleItem(
+                                    dayNumber = dayNumber,
+                                    state = dayState,
+                                    isToday = isToday,
+                                    circleSize = circleSize,
+                                    isTablet = isTablet,
+                                    is6Row = is6Row
+                                )
+                            } else {
+                                Spacer(modifier = Modifier.size(circleSize))
+                            }
                         }
                     }
                 }
@@ -349,10 +385,11 @@ private fun DayCircleItem(
     dayNumber: Int,
     state: CalendarDayState,
     isToday: Boolean,
+    circleSize: androidx.compose.ui.unit.Dp = 42.dp,
+    isTablet: Boolean = false,
+    is6Row: Boolean = false,
     modifier: Modifier = Modifier
 ) {
-    val circleSize = 38.dp
-
     Box(
         modifier = modifier
             .size(circleSize)
@@ -475,8 +512,8 @@ private fun DayCircleItem(
 
         if (state == CalendarDayState.MISSED) {
             // Cancelled X in cream
-            Canvas(modifier = Modifier.size(14.dp)) {
-                val strokeWidthPx = 2.4.dp.toPx()
+            Canvas(modifier = Modifier.size(if (is6Row) 14.dp else 16.dp)) {
+                val strokeWidthPx = (if (is6Row) 2.3.dp else 2.6.dp).toPx()
                 val color = Color(0xFFFDFCF8)
                 drawLine(
                     color = color,
@@ -496,8 +533,12 @@ private fun DayCircleItem(
         } else {
             Text(
                 text = dayNumber.toString(),
-                fontSize = 15.sp,
-                fontWeight = if (state == CalendarDayState.PRE_INSTALL) FontWeight.Normal else FontWeight.Medium,
+                fontSize = if (isTablet) {
+                    if (is6Row) 18.sp else 20.sp
+                } else {
+                    if (is6Row) 16.sp else 18.sp
+                },
+                fontWeight = if (state == CalendarDayState.PRE_INSTALL) FontWeight.Normal else FontWeight.Bold,
                 color = if (state == CalendarDayState.PRE_INSTALL) Color(0xFF8B7E72).copy(alpha = 0.50f) else Color(0xFFFDFCF8),
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis

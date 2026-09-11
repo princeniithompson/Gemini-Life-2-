@@ -94,27 +94,55 @@ object WallpaperVerseRenderer {
             val colorInt = VersePrefsManager.getVerseColor(context)
 
             val baseBitmap = getBaseWallpaperBitmap(context)
+            val renderedBitmap = try {
+                renderVerseOnBitmap(
+                    context = context,
+                    baseBitmap = baseBitmap,
+                    verseText = text,
+                    yPct = yPct,
+                    scale = scale,
+                    stylePreset = style,
+                    colorInt = colorInt
+                )
+            } finally {
+                if (!baseBitmap.isRecycled) {
+                    baseBitmap.recycle()
+                }
+            }
 
-            val renderedBitmap = renderVerseOnBitmap(
-                context = context,
-                baseBitmap = baseBitmap,
-                verseText = text,
-                yPct = yPct,
-                scale = scale,
-                stylePreset = style,
-                colorInt = colorInt
-            )
-
-            // Apply directly to Lock Screen ONLY
+            // Apply directly to Lock Screen using file stream for system persistence
+            val tempFile = File(context.cacheDir, "temp_lock_rendered_${System.currentTimeMillis()}.png")
             isSelfUpdatingWallpaper = true
             try {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-                    wallpaperManager.setBitmap(renderedBitmap, null, false, WallpaperManager.FLAG_LOCK)
-                } else {
-                    wallpaperManager.setBitmap(renderedBitmap)
+                FileOutputStream(tempFile).use { fos ->
+                    renderedBitmap.compress(Bitmap.CompressFormat.PNG, 100, fos)
+                    fos.flush()
                 }
-                Log.i(TAG, "Successfully rendered prayer onto lock screen wallpaper")
+
+                tempFile.inputStream().use { stream ->
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                        wallpaperManager.setStream(
+                            stream,
+                            null,
+                            true,
+                            WallpaperManager.FLAG_LOCK
+                        )
+                    } else {
+                        wallpaperManager.setStream(stream)
+                    }
+                }
+                Log.i(TAG, "Successfully streamed prayer wallpaper to system lock screen pipe")
             } finally {
+                try {
+                    if (tempFile.exists()) {
+                        tempFile.delete()
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "Failed deleting temp wallpaper render file: ${e.message}")
+                }
+                if (!renderedBitmap.isRecycled) {
+                    renderedBitmap.recycle()
+                }
                 delay(1000)
                 isSelfUpdatingWallpaper = false
             }

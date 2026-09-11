@@ -70,21 +70,109 @@ enum class GuideImageType(
     val url: String,
     val fallbackCaption: String
 ) {
-    TOS(
-        filename = "guide_tos.png",
-        url = "https://files.catbox.moe/o0c4pm.png",
-        fallbackCaption = "1-2. Tick the box, then tap Continue. The emails box is optional."
-    ),
-    KEYS(
-        filename = "guide_keys.jpg",
-        url = "https://files.catbox.moe/b8wcyq.jpg",
-        fallbackCaption = "3. Tap the copy icon to copy your key. If the page is empty, tap Create API key first. Free tier means you never pay."
-    ),
     JESUS_LAMB(
         filename = "jesus_lamb.png",
         url = "https://files.catbox.moe/fbrlan.png",
         fallbackCaption = "Jesus with Lamb"
     )
+}
+
+object GuideVideoLoader {
+    const val VIDEO_URL = "https://files.catbox.moe/g5nvv0.mp4"
+    const val VIDEO_FILENAME = "api_key_tutorial.mp4"
+    private const val TAG = "GuideVideoLoader"
+
+    fun getCachedVideoFile(context: Context): File {
+        val cacheDir = File(context.cacheDir, "guides")
+        if (!cacheDir.exists()) cacheDir.mkdirs()
+        return File(cacheDir, VIDEO_FILENAME)
+    }
+
+    fun getVideoDimensions(file: File): Pair<Int, Int> {
+        if (!file.exists() || file.length() <= 0) return Pair(9, 16)
+        return try {
+            val retriever = android.media.MediaMetadataRetriever()
+            retriever.setDataSource(file.absolutePath)
+            val wStr = retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)
+            val hStr = retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)
+            val rStr = retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION)
+            retriever.release()
+
+            var width = wStr?.toIntOrNull() ?: 9
+            var height = hStr?.toIntOrNull() ?: 16
+            val rotation = rStr?.toIntOrNull() ?: 0
+
+            if (rotation == 90 || rotation == 270) {
+                val tmp = width
+                width = height
+                height = tmp
+            }
+            if (width <= 0 || height <= 0) Pair(9, 16) else Pair(width, height)
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to retrieve video metadata: ${e.message}")
+            Pair(9, 16)
+        }
+    }
+
+    suspend fun downloadVideo(
+        context: Context,
+        onProgress: (Float) -> Unit = {}
+    ): File? = withContext(Dispatchers.IO) {
+        try {
+            val targetFile = getCachedVideoFile(context)
+            if (targetFile.exists() && targetFile.length() > 0) {
+                Log.i(TAG, "[VIDEO] Cache hit for $VIDEO_FILENAME (${targetFile.length()} bytes)")
+                onProgress(1f)
+                return@withContext targetFile
+            }
+
+            Log.i(TAG, "[VIDEO] Cache miss for $VIDEO_FILENAME. Downloading from $VIDEO_URL...")
+            val cacheDir = File(context.cacheDir, "guides")
+            if (!cacheDir.exists()) cacheDir.mkdirs()
+            val tempFile = File(cacheDir, "$VIDEO_FILENAME.tmp")
+
+            val url = URL(VIDEO_URL)
+            val connection = (url.openConnection() as HttpURLConnection).apply {
+                connectTimeout = 15000
+                readTimeout = 30000
+                instanceFollowRedirects = true
+                setRequestProperty("User-Agent", "FirstLight-Android")
+            }
+            connection.connect()
+
+            if (connection.responseCode in 200..299) {
+                val contentLength = connection.contentLength
+                var downloadedBytes = 0L
+
+                connection.inputStream.use { input ->
+                    FileOutputStream(tempFile).use { output ->
+                        val buffer = ByteArray(8192)
+                        var bytesRead: Int
+                        while (input.read(buffer).also { bytesRead = it } != -1) {
+                            output.write(buffer, 0, bytesRead)
+                            downloadedBytes += bytesRead
+                            if (contentLength > 0) {
+                                onProgress((downloadedBytes.toFloat() / contentLength.toFloat()).coerceIn(0f, 1f))
+                            }
+                        }
+                    }
+                }
+
+                if (tempFile.exists() && tempFile.length() > 0) {
+                    tempFile.renameTo(targetFile)
+                    Log.i(TAG, "[VIDEO] Successfully downloaded and cached $VIDEO_FILENAME (${targetFile.length()} bytes)")
+                    onProgress(1f)
+                    return@withContext targetFile
+                }
+            } else {
+                Log.e(TAG, "[VIDEO] Failed downloading $VIDEO_FILENAME, HTTP response: ${connection.responseCode}")
+            }
+            connection.disconnect()
+        } catch (e: Exception) {
+            Log.e(TAG, "[VIDEO] Error loading video $VIDEO_FILENAME: ${e.message}", e)
+        }
+        null
+    }
 }
 
 object GuideImageLoader {
@@ -94,10 +182,11 @@ object GuideImageLoader {
     fun preload(context: Context) {
         CoroutineScope(Dispatchers.IO).launch {
             try {
-                Log.i(TAG, "Starting preload for guide images and assets...")
+                Log.i(TAG, "Starting preload for guide images and video assets...")
                 for (type in GuideImageType.values()) {
                     loadGuideBitmap(context, type)
                 }
+                GuideVideoLoader.downloadVideo(context)
                 Log.i(TAG, "Preload completed successfully.")
             } catch (e: Throwable) {
                 Log.w(TAG, "Preload error: ${e.message}")
